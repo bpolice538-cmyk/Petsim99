@@ -169,11 +169,10 @@ local function findHallwayPosition(roomModel)
 	return centerCFrame.Position + Vector3.new(0, 2, 0), nil
 end
 
+-- ============================================
+-- TP TO SPAWN - FIXED (DOESN'T RESET SCANNING)
+-- ============================================
 local function TPtoSpawn()
-	if not canDoAction() then
-		return
-	end
-
 	local character = getCharacter()
 	if not character then
 		return
@@ -202,10 +201,10 @@ local function TPtoSpawn()
 		end
 	end)
 	
+	-- Only reset mini chest state, NOT scanning state
 	isInMiniChestRoom = false
 	currentMiniChestRoomUID = nil
 	isOnRoof = false
-	miniChestIndex = 1
 end
 
 -- ============================================
@@ -559,7 +558,6 @@ local function TeleportToRoom(roomUID)
 	local roomModel = roomData.Model
 	local roomId = roomData.Id
 
-	-- Handle Locked Egg Rooms with walking
 	if roomId == "DeepLockedEggRoom" then
 		local targetPos = nil
 		local eggObj = roomModel:FindFirstChild("Backrooms Egg")
@@ -690,7 +688,7 @@ local function getBestLockedEggRoom()
 end
 
 -- ============================================
--- SCAN FUNCTION (YOUR WORKING LOGIC)
+-- SCAN FUNCTION - FIXED (DOESN'T RESET ON SPAWN)
 -- ============================================
 local function Scan()
 	if _G.IsScanning == true then
@@ -878,10 +876,11 @@ local function Scan()
 				print("Found " .. (afterCount - beforeCount) .. " new rooms! Total: " .. afterCount)
 			end
 			
+			-- When no new rooms found, teleport to spawn to refresh BUT KEEP SCANNING ACTIVE
 			if noNewRoomsCount > 5 then
-				print("No new rooms found, returning to spawn to refresh")
+				print("No new rooms found, refreshing at spawn...")
 				TPtoSpawn()
-				task.wait(0.5)
+				task.wait(1)
 				noNewRoomsCount = 0
 				scanExistingRooms()
 			end
@@ -1413,7 +1412,7 @@ task.spawn(function()
 end)
 
 -- ============================================
--- CREATE UI
+-- CREATE UI (SAME AS BEFORE)
 -- ============================================
 local function CreateUI()
 	local screenGui = Instance.new("ScreenGui")
@@ -1650,14 +1649,12 @@ local function CreateUI()
 		return divider
 	end
 	
-	-- SCAN BUTTON
 	createButton("🔍 Scan", function() 
 		Scan()
 	end)
 	
 	createDivider()
 	
-	-- EGG TELEPORTS
 	createButton("🥚 TP Best Free Egg", function()
 		if (not canDoAction()) then return end
 		if #_G.ScannedRooms == 0 then
@@ -1690,7 +1687,6 @@ local function CreateUI()
 	
 	createDivider()
 	
-	-- BOSS & MINI TELEPORTS
 	createButton("🚪 TP Boss (200 studs)", function()
 		if (not canDoAction()) then return end
 		if #_G.AllBossRooms == 0 then
@@ -1749,7 +1745,6 @@ local function CreateUI()
 	
 	createDivider()
 	
-	-- TOGGLES
 	createToggle("🥚 Auto Hatch", function(value)
 		_G.AutoHatch = value
 		print("Auto Hatch: " .. (value and "ON" or "OFF"))
@@ -1806,7 +1801,6 @@ local function CreateUI()
 	
 	createDivider()
 	
-	-- CLICKER SECTION
 	local clickerLabel = Instance.new("TextLabel")
 	clickerLabel.Size = UDim2.new(0, 185, 0, 12)
 	clickerLabel.BackgroundTransparency = 1
