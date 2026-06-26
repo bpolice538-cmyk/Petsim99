@@ -60,8 +60,8 @@ _G.FastHatch = false
 _G.IsTeleportingToSpawn = false
 _G.IsScanningMode = false
 
--- Use a moderate height that's invisible but still loads rooms
-local SCAN_HEIGHT_OFFSET = 150  -- Reduced from 200 to load rooms better
+-- SCAN HEIGHT - 50 studs above ground (invisible but loads rooms)
+local SCAN_HEIGHT_OFFSET = 50
 local NORMAL_HEIGHT_OFFSET = 2
 
 local autoMiniLastActionTime = 0
@@ -144,7 +144,6 @@ local function findHallwayPosition(roomModel)
 		return nil, nil
 	end
 	
-	-- Check for LockedDoors first
 	local lockedDoors = roomModel:FindFirstChild("LockedDoors")
 	if lockedDoors then
 		for _, child in ipairs(lockedDoors:GetChildren()) do
@@ -159,7 +158,6 @@ local function findHallwayPosition(roomModel)
 		end
 	end
 	
-	-- Check for regular Doors
 	local doors = roomModel:FindFirstChild("Doors")
 	if doors then
 		for _, door in ipairs(doors:GetChildren()) do
@@ -173,7 +171,6 @@ local function findHallwayPosition(roomModel)
 		end
 	end
 	
-	-- Check for HallwayParts
 	local hallwayParts = roomModel:FindFirstChild("HallwayParts")
 	if hallwayParts then
 		for _, part in ipairs(hallwayParts:GetChildren()) do
@@ -183,13 +180,11 @@ local function findHallwayPosition(roomModel)
 		end
 	end
 	
-	-- Check for BREAK_ZONE (boss rooms)
 	local breakZone = roomModel:FindFirstChild("BREAK_ZONE")
 	if breakZone then
 		return breakZone:GetPivot().Position + Vector3.new(0, 2, 0), nil
 	end
 	
-	-- Fallback: Room center
 	local centerCFrame = roomModel:GetBoundingBox()
 	return centerCFrame.Position + Vector3.new(0, 2, 0), nil
 end
@@ -748,7 +743,7 @@ local function TeleportAndLoad(targetPos)
 	rootPart.Anchored = false
 	
 	-- Wait for rooms to load
-	task.wait(1.5)
+	task.wait(1.0)
 	
 	_G.Teleporting = false
 	return true
@@ -765,7 +760,7 @@ local function Scan()
 	local message = createMessage("Exploring the backrooms...")
 	
 	if _G.UI then
-		_G.UI.UpdateStatus("Scanning...")
+		_G.UI.UpdateStatus("Scanning at 50 studs...")
 	end
 
 	local folder = getGeneratedBackrooms()
@@ -826,7 +821,7 @@ local function Scan()
 						newRoomsFound = newRoomsFound + 1
 						
 						if _G.UI then
-							_G.UI.UpdateStatus("Scanned " .. #_G.ScannedRooms .. " rooms")
+							_G.UI.UpdateStatus("Scanned " .. #_G.ScannedRooms .. " rooms at 50 studs")
 							_G.UI.UpdateRooms(#_G.ScannedRooms)
 						end
 
@@ -850,7 +845,7 @@ local function Scan()
 	task.wait(2)
 	
 	scanExistingRooms()
-	print("Initial scan: " .. #_G.ScannedRooms .. " rooms found")
+	print("Initial scan at 50 studs: " .. #_G.ScannedRooms .. " rooms found")
 
 	local maxLoops = 300
 	local loopCount = 0
@@ -925,15 +920,14 @@ local function Scan()
 		_G.VistedRooms[targetRoom.uid] = true
 		visitedCount = visitedCount + 1
 		
-		-- Teleport to position above the room (invisible but loads rooms)
+		-- Teleport to 50 studs above the room
 		local teleportPos = Vector3.new(
 			targetRoom.Position.X,
 			SCAN_HEIGHT_OFFSET,
 			targetRoom.Position.Z
 		)
 		
-		print("📍 Scanning room: " .. (targetRoom.Id or "Unknown") .. " (" .. visitedCount .. "/" .. #_G.ScannedRooms .. " visited)")
-		print("   Position: " .. tostring(teleportPos))
+		print("📍 Scanning room at 50 studs: " .. (targetRoom.Id or "Unknown") .. " (" .. visitedCount .. "/" .. #_G.ScannedRooms .. " visited)")
 		
 		-- Teleport and wait for rooms to load
 		local success = TeleportAndLoad(teleportPos)
@@ -949,7 +943,7 @@ local function Scan()
 		
 		if newRooms and newRooms > 0 then
 			noNewRoomsCount = 0
-			print("✅ Found " .. newRooms .. " new rooms! Total: " .. #_G.ScannedRooms)
+			print("✅ Found " .. newRooms .. " new rooms at 50 studs! Total: " .. #_G.ScannedRooms)
 			print("   Boss Rooms: " .. #_G.AllBossRooms .. " | Mini Chests: " .. #_G.AllMiniChestRooms)
 		else
 			noNewRoomsCount = noNewRoomsCount + 1
@@ -968,6 +962,7 @@ local function Scan()
 		if loopCount % 10 == 0 then
 			print("📊 Progress: " .. #_G.ScannedRooms .. " rooms (" .. loopCount .. "/" .. maxLoops .. ")")
 			print("   Visited: " .. visitedCount .. " | Unvisited: " .. (#_G.ScannedRooms - visitedCount))
+			print("   Scan Height: 50 studs")
 		end
 	end
 
@@ -977,7 +972,7 @@ local function Scan()
 	DebugHallwayPositions()
 	
 	if _G.UI then
-		_G.UI.UpdateStatus("Scan Complete (" .. #_G.ScannedRooms .. " rooms)")
+		_G.UI.UpdateStatus("Scan Complete at 50 studs (" .. #_G.ScannedRooms .. " rooms)")
 		_G.UI.UpdateRooms(#_G.ScannedRooms)
 	end
 	
@@ -989,6 +984,7 @@ local function Scan()
 	print("Boss Rooms: " .. #_G.AllBossRooms)
 	print("Mini Chest Rooms: " .. #_G.AllMiniChestRooms)
 	print("Rooms visited: " .. visitedCount)
+	print("Scan Height: 50 studs")
 	print("=====================")
 end
 
