@@ -18,6 +18,8 @@ local Network = require(game.ReplicatedStorage.Library.Client.Network)
 local PlayerPet = require(game.ReplicatedStorage.Library.Client.PlayerPet)
 local InstancingCmds = require(game.ReplicatedStorage.Library.Client.InstancingCmds)
 local MiscItem = require(game.ReplicatedStorage.Library.Items.MiscItem)
+local EggCmds = require(game.ReplicatedStorage.Library.Client.EggCmds)
+local CustomEggsCmds = require(game.ReplicatedStorage.Library.Client.CustomEggsCmds)
 
 local localPlayer = Players.LocalPlayer
 local enterPosition = nil
@@ -46,6 +48,9 @@ _G.AutoClickerInterval = 5
 _G.AllBossRooms = {}
 _G.AllMiniChestRooms = {}
 _G.ShowDirectionGuide = true
+_G.AutoHatch = false
+_G.FastHatch = false
+_G.AutoTeleportMiniChest = false
 
 -- ============================================
 -- HELPER FUNCTIONS
@@ -119,7 +124,6 @@ local function findHallwayPosition(roomModel)
 		return nil, nil
 	end
 	
-	-- Check for LockedDoors first
 	local lockedDoors = roomModel:FindFirstChild("LockedDoors")
 	if lockedDoors then
 		for _, child in ipairs(lockedDoors:GetChildren()) do
@@ -134,7 +138,6 @@ local function findHallwayPosition(roomModel)
 		end
 	end
 	
-	-- Check for regular Doors
 	local doors = roomModel:FindFirstChild("Doors")
 	if doors then
 		for _, door in ipairs(doors:GetChildren()) do
@@ -148,7 +151,6 @@ local function findHallwayPosition(roomModel)
 		end
 	end
 	
-	-- Check for HallwayParts
 	local hallwayParts = roomModel:FindFirstChild("HallwayParts")
 	if hallwayParts then
 		for _, part in ipairs(hallwayParts:GetChildren()) do
@@ -158,13 +160,11 @@ local function findHallwayPosition(roomModel)
 		end
 	end
 	
-	-- Check for BREAK_ZONE (boss rooms)
 	local breakZone = roomModel:FindFirstChild("BREAK_ZONE")
 	if breakZone then
 		return breakZone:GetPivot().Position + Vector3.new(0, 2, 0), nil
 	end
 	
-	-- Fallback: Room center
 	local centerCFrame = roomModel:GetBoundingBox()
 	return centerCFrame.Position + Vector3.new(0, 2, 0), nil
 end
@@ -310,7 +310,6 @@ local function UnlockLockedEggRoom(roomUID, targetPosition)
 		return true
 	end
 
-	-- Find the lock and door
 	local lockedPart = nil
 	local doorPart = nil
 	for _, child in ipairs(lockedDoors:GetChildren()) do
@@ -327,12 +326,10 @@ local function UnlockLockedEggRoom(roomUID, targetPosition)
 		return true
 	end
 
-	-- Get door position and direction
 	local doorPosition = doorPart and doorPart.Position or lockedPart.Position
 	local doorCFrame = doorPart and doorPart.CFrame or CFrame.new(doorPosition)
 	local doorFront = doorCFrame.LookVector
 	
-	-- Position in front of door (hallway side)
 	local hallwayPos = doorPosition + (doorFront * 8) + Vector3.new(0, 2, 0)
 	local doorFrontPos = doorPosition + (doorFront * 4) + Vector3.new(0, 2, 0)
 	
@@ -342,7 +339,6 @@ local function UnlockLockedEggRoom(roomUID, targetPosition)
 	local rootPart = character:FindFirstChild("HumanoidRootPart")
 	local humanoid = character:FindFirstChildOfClass("Humanoid")
 	
-	-- Teleport to hallway in front of door
 	if rootPart then
 		Network.Fire("RequestStreaming", hallwayPos)
 		rootPart.Anchored = true
@@ -353,18 +349,15 @@ local function UnlockLockedEggRoom(roomUID, targetPosition)
 	
 	print("🔓 Walking to door to unlock...")
 	
-	-- Walk to door front
 	if humanoid then
 		humanoid:MoveTo(doorFrontPos)
 		task.wait(1.5)
 	end
 	
-	-- Unlock the door
 	print("🔓 Unlocking door with key...")
 	activeInstance:FireCustom("AbstractRoom_FireServer", roomUID, "UnlockDoors")
 	task.wait(1.5)
 	
-	-- Check if door is unlocked
 	local isUnlocked = true
 	for _, child in ipairs(lockedDoors:GetChildren()) do
 		local lock = child:FindFirstChild("Lock")
@@ -380,17 +373,14 @@ local function UnlockLockedEggRoom(roomUID, targetPosition)
 		task.wait(1)
 	end
 	
-	-- Walk through to the egg
 	local targetPos = targetPosition or roomData.Position + Vector3.new(0, 2, 0)
 	print("🚶 Walking through door to egg position: " .. tostring(targetPos))
 	
-	-- Walk through the door
 	if humanoid then
 		humanoid:MoveTo(targetPos)
 		task.wait(0.5)
 	end
 	
-	-- Walk through hallway to target
 	WalkThroughHallway(doorFrontPos, targetPos)
 	
 	print("✅ Room unlocked and walked to egg!")
@@ -398,7 +388,7 @@ local function UnlockLockedEggRoom(roomUID, targetPosition)
 end
 
 -- ============================================
--- TELEPORT TO CENTER OF ROOF OF MINI CHEST ROOM
+-- TELEPORT FUNCTIONS
 -- ============================================
 local function TeleportToMiniChestRoof(roomUID)
 	if _G.Teleporting then
@@ -429,7 +419,6 @@ local function TeleportToMiniChestRoof(roomUID)
 	local roomModel = roomData.Model
 	local pos = roomData.Position
 
-	-- Find the CENTER highest point in the room for roof position
 	local centerX = pos.X
 	local centerZ = pos.Z
 	local highestPoint = pos.Y + 30
@@ -445,36 +434,29 @@ local function TeleportToMiniChestRoof(roomUID)
 		end
 	end
 	
-	-- Center roof position
 	local roofPos = Vector3.new(centerX, highestPoint, centerZ)
 	
-	-- Force streaming for both positions
 	Network.Fire("RequestStreaming", pos)
 	Network.Fire("RequestStreaming", roofPos)
 
-	-- Clear any existing forces
 	rootPart.Anchored = true
 	rootPart.Velocity = Vector3.new(0, 0, 0)
 	rootPart.RotVelocity = Vector3.new(0, 0, 0)
 	
-	-- Teleport to roof position
 	rootPart.CFrame = CFrame.new(roofPos)
 	
-	-- Wait for server to sync
 	task.wait(0.5)
 	
-	-- Unanchor
 	rootPart.Anchored = false
 
 	_G.Teleporting = false
 	
 	isOnRoof = true
 	
-	-- Check if this is actually a mini chest room
 	if roomData.Id and string.match(roomData.Id, "DeepChestRoom") ~= nil then
 		isInMiniChestRoom = true
 		currentMiniChestRoomUID = roomUID
-		print("✅ Now on CENTER roof of Mini Chest Room! Pets will auto-break chests below.")
+		print("✅ Now on CENTER roof of Mini Chest Room!")
 	else
 		print("⚠️ Not a mini chest room, returning to spawn...")
 		isInMiniChestRoom = false
@@ -483,9 +465,6 @@ local function TeleportToMiniChestRoof(roomUID)
 	end
 end
 
--- ============================================
--- TELEPORT TO BOSS ROOM - 200 studs outside
--- ============================================
 local function TeleportToBossOutside(roomUID)
 	if _G.Teleporting then
 		return
@@ -551,9 +530,6 @@ local function TeleportToBossOutside(roomUID)
 	print("🚪 Teleported 200 studs outside Boss Room!")
 end
 
--- ============================================
--- TELEPORT TO ROOM (HANDLES LOCKED EGG ROOMS)
--- ============================================
 local function TeleportToRoom(roomUID)
 	if _G.Teleporting then
 		return
@@ -583,9 +559,8 @@ local function TeleportToRoom(roomUID)
 	local roomModel = roomData.Model
 	local roomId = roomData.Id
 
-	-- Check if it's a locked egg room
+	-- Handle Locked Egg Rooms with walking
 	if roomId == "DeepLockedEggRoom" then
-		-- Use the unlock and walk method
 		local targetPos = nil
 		local eggObj = roomModel:FindFirstChild("Backrooms Egg")
 		if eggObj then
@@ -595,14 +570,12 @@ local function TeleportToRoom(roomUID)
 		end
 		
 		_G.Teleporting = false
-		local success = UnlockLockedEggRoom(roomUID, targetPos)
+		UnlockLockedEggRoom(roomUID, targetPos)
 		return
 	end
 
-	-- For free egg rooms, teleport directly
 	local targetPos = roomData.Position + Vector3.new(0, 3, 0)
 	
-	-- Check for egg object in free egg room
 	local eggObj = roomModel:FindFirstChild("Backrooms Egg")
 	if eggObj then
 		targetPos = eggObj.Position + Vector3.new(0, 2, 0)
@@ -629,7 +602,95 @@ local function TeleportToRoom(roomUID)
 end
 
 -- ============================================
--- SCAN FUNCTION
+-- AUTO HATCH FUNCTIONS
+-- ============================================
+local function getNearestEgg(character)
+	if character == nil then
+		return
+	end
+
+	local closestEgg = nil
+	local minDist = 40
+
+	for _, egg in pairs(CustomEggsCmds.All()) do
+		if egg._position then
+			local dist = (egg._position - character:GetPivot().Position).Magnitude
+			if dist < minDist then
+				minDist = dist
+				closestEgg = egg
+			end
+		end
+	end
+
+	return closestEgg
+end
+
+local function FastHatchEgg(egg)
+	if not egg then return end
+	
+	pcall(function()
+		local maxHatch = EggCmds.GetMaxHatch(egg._dir)
+		
+		if _G.FastHatch then
+			local batchSize = 1000
+			local totalHatched = 0
+			
+			for i = 1, maxHatch, batchSize do
+				local hatchCount = math.min(batchSize, maxHatch - i + 1)
+				Network.Invoke("CustomEggs_Hatch", egg._uid, hatchCount)
+				totalHatched = totalHatched + hatchCount
+				task.wait(0.00001)
+				if totalHatched % 10000 == 0 then
+					print("⚡ Fast hatched " .. totalHatched .. "/" .. maxHatch .. " eggs...")
+				end
+			end
+			print("⚡ Fast hatched " .. totalHatched .. " eggs in batches of " .. batchSize .. "!")
+		else
+			Network.Invoke("CustomEggs_Hatch", egg._uid, maxHatch)
+			print("🥚 Hatched " .. maxHatch .. " eggs!")
+		end
+	end)
+end
+
+-- ============================================
+-- AUTO EGG FUNCTIONS
+-- ============================================
+local function getBestEggRoom()
+	local bestRoom = nil
+	local maxMult = -1
+
+	for _, room in ipairs(_G.ScannedRooms) do
+		if string.match(room.Id, "DeepFreeEggRoom") ~= nil and room.EggMultiplier ~= nil then
+			if room.EggMultiplier > maxMult then
+				maxMult = room.EggMultiplier
+				bestRoom = room
+			end
+		end
+	end
+
+	return bestRoom
+end
+
+local function getBestLockedEggRoom()
+	local bestRoom = nil
+	local maxMult = -1
+
+	for _, room in ipairs(_G.ScannedRooms) do
+		if room.Id == "DeepLockedEggRoom" and room.EggMultiplier ~= nil then
+			if (not room.ExpireTime) or (room.ExpireTime - workspace:GetServerTimeNow() > 0) then
+				if room.EggMultiplier > maxMult then
+					maxMult = room.EggMultiplier
+					bestRoom = room
+				end
+			end
+		end
+	end
+
+	return bestRoom
+end
+
+-- ============================================
+-- SCAN FUNCTION (YOUR WORKING LOGIC)
 -- ============================================
 local function Scan()
 	if _G.IsScanning == true then
@@ -716,11 +777,11 @@ local function Scan()
 						end
 						
 						if string.match(roomId, "DeepFreeEggRoom") ~= nil then
-							print("🥚 Found Free Egg Room #" .. #_G.ScannedRooms)
+							print("🥚 Found Free Egg Room with " .. (mult > 0 and mult or "?") .. "x multiplier")
 						end
 						
 						if string.match(roomId, "DeepLockedEggRoom") ~= nil then
-							print("🔒 Found Locked Egg Room #" .. #_G.ScannedRooms)
+							print("🔒 Found Locked Egg Room with " .. (mult > 0 and mult or "?") .. "x multiplier")
 						end
 					end
 				end
@@ -850,7 +911,7 @@ local function Scan()
 end
 
 -- ============================================
--- AUTO BREAK MINI CHEST - LOOP THROUGH ALL MINI CHESTS
+-- AUTO BREAK MINI CHEST
 -- ============================================
 local function AutoBreakMiniChestRoom()
 	if not _G.AutoBreakMiniChest then
@@ -999,7 +1060,7 @@ task.spawn(function()
 end)
 
 -- ============================================
--- DIRECTION GUIDE FOR BOSS (3D Arrow)
+-- DIRECTION GUIDE FOR BOSS
 -- ============================================
 local directionArrow = nil
 local directionLine = nil
@@ -1227,6 +1288,23 @@ task.spawn(function()
 end)
 
 -- ============================================
+-- AUTO HATCH LOOP
+-- ============================================
+task.spawn(function()
+	while true do
+		task.wait(0.1)
+		if not _G.AutoHatch then continue end
+		if not canDoAction() then continue end
+		local character = getCharacter()
+		if not character then continue end
+		local egg = getNearestEgg(character)
+		if egg then
+			FastHatchEgg(egg)
+		end
+	end
+end)
+
+-- ============================================
 -- AUTO BOSS FARM LOOP
 -- ============================================
 task.spawn(function()
@@ -1335,7 +1413,7 @@ task.spawn(function()
 end)
 
 -- ============================================
--- CREATE UI - RETRACTABLE TO ICON
+-- CREATE UI
 -- ============================================
 local function CreateUI()
 	local screenGui = Instance.new("ScreenGui")
@@ -1345,8 +1423,8 @@ local function CreateUI()
 	
 	local mainFrame = Instance.new("Frame")
 	mainFrame.Name = "MainFrame"
-	mainFrame.Size = UDim2.new(0, 200, 0, 170)
-	mainFrame.Position = UDim2.new(0, 5, 0.5, -85)
+	mainFrame.Size = UDim2.new(0, 200, 0, 200)
+	mainFrame.Position = UDim2.new(0, 5, 0.5, -100)
 	mainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 30)
 	mainFrame.BackgroundTransparency = 0.1
 	mainFrame.BorderSizePixel = 2
@@ -1572,27 +1650,24 @@ local function CreateUI()
 		return divider
 	end
 	
+	-- SCAN BUTTON
 	createButton("🔍 Scan", function() 
 		Scan()
 	end)
 	
+	createDivider()
+	
+	-- EGG TELEPORTS
 	createButton("🥚 TP Best Free Egg", function()
 		if (not canDoAction()) then return end
 		if #_G.ScannedRooms == 0 then
 			print("⚠️ Scan first!")
 			return
 		end
-		local bestRoom = nil
-		local bestMult = -1
-		for _, room in ipairs(_G.ScannedRooms) do
-			if string.match(room.Id, "DeepFreeEggRoom") ~= nil and room.EggMultiplier and room.EggMultiplier > bestMult then
-				bestMult = room.EggMultiplier
-				bestRoom = room
-			end
-		end
-		if bestRoom then
-			print("🥚 Teleporting to Best Free Egg Room with " .. bestMult .. "x multiplier")
-			TeleportToRoom(bestRoom.uid)
+		local room = getBestEggRoom()
+		if room then
+			print("🥚 Teleporting to Best Free Egg Room with " .. (room.EggMultiplier or "?") .. "x multiplier")
+			TeleportToRoom(room.uid)
 		else
 			print("❌ No Free Egg Room found!")
 		end
@@ -1604,22 +1679,18 @@ local function CreateUI()
 			print("⚠️ Scan first!")
 			return
 		end
-		local bestRoom = nil
-		local bestMult = -1
-		for _, room in ipairs(_G.ScannedRooms) do
-			if room.Id == "DeepLockedEggRoom" and room.EggMultiplier and room.EggMultiplier > bestMult then
-				bestMult = room.EggMultiplier
-				bestRoom = room
-			end
-		end
-		if bestRoom then
-			print("🔒 Teleporting to Best Locked Egg Room with " .. bestMult .. "x multiplier")
-			TeleportToRoom(bestRoom.uid)
+		local room = getBestLockedEggRoom()
+		if room then
+			print("🔒 Teleporting to Best Locked Egg Room with " .. (room.EggMultiplier or "?") .. "x multiplier")
+			TeleportToRoom(room.uid)
 		else
 			print("❌ No Locked Egg Room found!")
 		end
 	end)
 	
+	createDivider()
+	
+	-- BOSS & MINI TELEPORTS
 	createButton("🚪 TP Boss (200 studs)", function()
 		if (not canDoAction()) then return end
 		if #_G.AllBossRooms == 0 then
@@ -1676,23 +1747,23 @@ local function CreateUI()
 	
 	createButton("🏠 Spawn", function() TPtoSpawn() end)
 	
-	createButton("🗑️ Clear", function()
-		_G.ScannedRooms = {}
-		_G.ScannedRoomsMap = {}
-		_G.VistedRooms = {}
-		_G.AllBossRooms = {}
-		_G.AllMiniChestRooms = {}
-		miniChestIndex = 1
-		if _G.UI then _G.UI.UpdateRooms(0); _G.UI.UpdateStatus("Cleared") end
-		if bossLabel then bossLabel.Text = "👑 Boss: 0" end
-		if miniLabel then miniLabel.Text = "📦 Mini: 0" end
-		if roomsLabel then roomsLabel.Text = "🏠 Rooms: 0" end
-		print("Cleared all scanned rooms")
-	end)
-	
 	createDivider()
 	
-	createToggle("🤖 Boss", function(value)
+	-- TOGGLES
+	createToggle("🥚 Auto Hatch", function(value)
+		_G.AutoHatch = value
+		print("Auto Hatch: " .. (value and "ON" or "OFF"))
+	end)
+	
+	createToggle("⚡ Fast Hatch", function(value)
+		_G.FastHatch = value
+		print("Fast Hatch: " .. (value and "ON" or "OFF"))
+		if value then
+			print("⚡ Fast Hatch: 0.01ms delay (INSTANT!)")
+		end
+	end)
+	
+	createToggle("🤖 Auto Boss", function(value)
 		if (not canDoAction()) then return end
 		_G.AutoMiniBoss = value
 		if value then
@@ -1735,6 +1806,7 @@ local function CreateUI()
 	
 	createDivider()
 	
+	-- CLICKER SECTION
 	local clickerLabel = Instance.new("TextLabel")
 	clickerLabel.Size = UDim2.new(0, 185, 0, 12)
 	clickerLabel.BackgroundTransparency = 1
@@ -1769,6 +1841,20 @@ local function CreateUI()
 			clickerPosLabel.Text = "📍 " .. math.floor(_G.AutoClickerX) .. "," .. math.floor(_G.AutoClickerY)
 			print("📍 Click position set to center of screen")
 		end
+	end)
+	
+	createButton("🗑️ Clear", function()
+		_G.ScannedRooms = {}
+		_G.ScannedRoomsMap = {}
+		_G.VistedRooms = {}
+		_G.AllBossRooms = {}
+		_G.AllMiniChestRooms = {}
+		miniChestIndex = 1
+		if _G.UI then _G.UI.UpdateRooms(0); _G.UI.UpdateStatus("Cleared") end
+		if bossLabel then bossLabel.Text = "👑 Boss: 0" end
+		if miniLabel then miniLabel.Text = "📦 Mini: 0" end
+		if roomsLabel then roomsLabel.Text = "🏠 Rooms: 0" end
+		print("Cleared all scanned rooms")
 	end)
 	
 	task.spawn(function()
@@ -1810,8 +1896,8 @@ local function CreateUI()
 		else
 			retractButton.Text = "🗕"
 			contentFrame.Visible = true
-			mainFrame.Size = UDim2.new(0, 200, 0, 170)
-			mainFrame.Position = UDim2.new(0, 5, 0.5, -85)
+			mainFrame.Size = UDim2.new(0, 200, 0, 200)
+			mainFrame.Position = UDim2.new(0, 5, 0.5, -100)
 			title.Text = "🎮 BR UI"
 		end
 	end)
@@ -1964,12 +2050,11 @@ end
 
 -- Create UI
 local ui = CreateUI()
-print("Backroom UI loaded!")
+print("✅ Backroom UI loaded!")
 print("🔍 FAST SCAN ACTIVATED")
 print("👑 Boss Rooms found: 0")
 print("📦 Mini Chest Rooms found: 0")
-print("🥚 Free Egg Rooms: 0")
-print("🔒 Locked Egg Rooms: 0")
+print("🥚 Auto Hatch & Fast Hatch available")
 print("🚪 TP Boss (200 studs) - Teleports 200 studs away from boss")
 print("📦 TP Mini (Roof) - Teleports to CENTER roof of mini chest")
 print("🐾 Mini (Loop) - Will loop through ALL mini chest rooms")
