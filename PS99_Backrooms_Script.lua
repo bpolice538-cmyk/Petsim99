@@ -27,6 +27,7 @@ local isInMiniChestRoom = false
 local currentMiniChestRoomUID = nil
 local isOnRoof = false
 local miniChestIndex = 1
+local isScanningActive = false -- Track if scanning is active
 
 -- ============================================
 -- GLOBAL VARIABLES
@@ -169,9 +170,6 @@ local function findHallwayPosition(roomModel)
 	return centerCFrame.Position + Vector3.new(0, 2, 0), nil
 end
 
--- ============================================
--- TP TO SPAWN - FIXED (DOESN'T RESET SCANNING)
--- ============================================
 local function TPtoSpawn()
 	local character = getCharacter()
 	if not character then
@@ -201,11 +199,23 @@ local function TPtoSpawn()
 		end
 	end)
 	
-	-- Only reset mini chest state, NOT scanning state
 	isInMiniChestRoom = false
 	currentMiniChestRoomUID = nil
 	isOnRoof = false
 end
+
+-- ============================================
+-- HANDLE CHARACTER RESPAWN DURING SCAN
+-- ============================================
+localPlayer.CharacterAdded:Connect(function()
+	-- If scanning was active, restart the scan loop
+	if isScanningActive then
+		print("🔄 Character respawned! Restarting scan...")
+		_G.IsScanning = false -- Reset scanning flag
+		task.wait(2) -- Wait for character to fully load
+		Scan() -- Restart scan
+	end
+end)
 
 -- ============================================
 -- KEY CHECK
@@ -688,7 +698,39 @@ local function getBestLockedEggRoom()
 end
 
 -- ============================================
--- SCAN FUNCTION - FIXED (DOESN'T RESET ON SPAWN)
+-- VOID PROTECTION - TELEPORTS TO SPAWN BUT KEEPS SCANNING ACTIVE
+-- ============================================
+task.spawn(function()
+	while true do
+		task.wait(0.5)
+		local character = getCharacter()
+		if not character then continue end
+		local rootPart = character:FindFirstChild("HumanoidRootPart")
+		if not rootPart then continue end
+		
+		-- If falling into void
+		if rootPart.Position.Y < -50 then
+			print("⚠️ Falling into void! Teleporting to spawn...")
+			if enterPosition then
+				-- Save scanning state
+				local wasScanning = _G.IsScanning
+				local wasScanningMode = _G.IsScanningMode
+				
+				TPtoSpawn()
+				
+				-- Restore scanning state
+				if wasScanning then
+					_G.IsScanning = true
+					_G.IsScanningMode = true
+					print("✅ Continued scanning after void teleport")
+				end
+			end
+		end
+	end
+end)
+
+-- ============================================
+-- SCAN FUNCTION - WITH RESPAWN HANDLING
 -- ============================================
 local function Scan()
 	if _G.IsScanning == true then
@@ -697,6 +739,8 @@ local function Scan()
 	end
 
 	_G.IsScanning = true
+	_G.IsScanningMode = true
+	isScanningActive = true -- Mark scanning as active
 
 	local message = createMessage("Exploring the backrooms...")
 	print("Starting FAST scan...")
@@ -787,6 +831,10 @@ local function Scan()
 		end
 	end
 
+	-- Initial scan
+	TPtoSpawn()
+	task.wait(2)
+	
 	scanExistingRooms()
 	print("Initial scan complete. Found " .. #_G.ScannedRooms .. " rooms")
 	print("👑 Boss Rooms found: " .. #_G.AllBossRooms)
@@ -798,21 +846,24 @@ local function Scan()
 	local visitedCount = 0
 	
 	while loopCount < maxLoops and #_G.ScannedRooms < 400 do
-		loopCount = loopCount + 1
-		
-		if _G.Teleporting == true then
-			task.wait(0.1)
-			continue
-		end
-
+		-- Check if character exists, if not wait for respawn
 		local character = getCharacter()
 		if not character then
-			task.wait(0.1)
+			print("⏳ Waiting for character to load...")
+			task.wait(1)
 			continue
 		end
 
 		local rootPart = character:FindFirstChild("HumanoidRootPart")
 		if not rootPart then
+			print("⏳ Waiting for root part...")
+			task.wait(0.5)
+			continue
+		end
+
+		loopCount = loopCount + 1
+		
+		if _G.Teleporting == true then
 			task.wait(0.1)
 			continue
 		end
@@ -876,7 +927,6 @@ local function Scan()
 				print("Found " .. (afterCount - beforeCount) .. " new rooms! Total: " .. afterCount)
 			end
 			
-			-- When no new rooms found, teleport to spawn to refresh BUT KEEP SCANNING ACTIVE
 			if noNewRoomsCount > 5 then
 				print("No new rooms found, refreshing at spawn...")
 				TPtoSpawn()
@@ -892,6 +942,8 @@ local function Scan()
 	end
 
 	_G.IsScanning = false
+	_G.IsScanningMode = false
+	isScanningActive = false -- Mark scanning as inactive
 	
 	if _G.UI then
 		_G.UI.UpdateStatus("Scan Complete (" .. #_G.ScannedRooms .. " rooms)")
