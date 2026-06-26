@@ -28,7 +28,6 @@ local currentMiniChestRoomUID = nil
 local isOnRoof = false
 local miniChestIndex = 1
 local isScanningActive = false
-local scanLoopRunning = false
 local shouldContinueScan = false
 
 -- ============================================
@@ -219,7 +218,7 @@ localPlayer.CharacterAdded:Connect(function()
 end)
 
 -- ============================================
--- VOID PROTECTION - TELEPORTS TO SPAWN BUT KEEPS SCANNING ACTIVE
+-- VOID PROTECTION - FIXED FOR SPAWN Y LEVEL
 -- ============================================
 task.spawn(function()
 	while true do
@@ -229,8 +228,9 @@ task.spawn(function()
 		local rootPart = character:FindFirstChild("HumanoidRootPart")
 		if not rootPart then continue end
 		
-		-- If falling into void
-		if rootPart.Position.Y < -50 then
+		-- Only trigger if falling below -100 (actual void)
+		-- Don't trigger if at spawn with low Y level
+		if rootPart.Position.Y < -100 then
 			print("⚠️ Falling into void! Teleporting to spawn...")
 			if enterPosition then
 				TPtoSpawn()
@@ -722,7 +722,7 @@ local function getBestLockedEggRoom()
 end
 
 -- ============================================
--- SCAN FUNCTION
+-- SCAN FUNCTION - FIXED FOR SPAWN Y LEVEL
 -- ============================================
 local function Scan()
 	if _G.IsScanning == true then
@@ -859,6 +859,8 @@ local function Scan()
 			print("🔄 Resuming scan after respawn...")
 			shouldContinueScan = false
 			task.wait(1)
+			-- Rescan rooms after respawn
+			scanExistingRooms()
 			continue
 		end
 
@@ -872,6 +874,7 @@ local function Scan()
 		-- Find nearest unvisited room
 		local room = nil
 		local minDistance = math.huge
+		
 		for _, r in ipairs(_G.ScannedRooms) do
 			if not _G.VistedRooms[r.uid] then
 				local dist = (r.Position - rootPart.Position).Magnitude
@@ -884,8 +887,10 @@ local function Scan()
 
 		if not room then
 			if #_G.ScannedRooms > 0 then
+				-- Reset visited rooms if we've explored all
+				_G.VistedRooms = {}
 				room = _G.ScannedRooms[math.random(1, #_G.ScannedRooms)]
-				print("No unvisited rooms, exploring random room")
+				print("All rooms visited! Resetting and exploring random room")
 			else
 				warn("No rooms found at all!")
 				break
@@ -937,7 +942,7 @@ local function Scan()
 				print("Found " .. (afterCount - beforeCount) .. " new rooms! Total: " .. afterCount)
 			end
 			
-			if noNewRoomsCount > 5 then
+			if noNewRoomsCount > 8 then
 				print("No new rooms found, refreshing at spawn...")
 				TPtoSpawn()
 				task.wait(1.5)
