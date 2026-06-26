@@ -49,9 +49,6 @@ _G.AutoTPAnomaly = false
 _G.MiniChestCycleIndex = 1
 _G.LastMiniChestTeleportTime = 0
 _G.MiniChestCooldown = 210
-_G.MiniChestCooldownMin = 1
-_G.MiniChestCooldownMax = 600
-_G.MiniChestActionType = "Cycle"
 
 _G.AutoHatch = false
 _G.AutoTPBestEgg = false
@@ -59,8 +56,6 @@ _G.AutoTPLockedEgg = false
 _G.InfinitePetSpeed = false
 _G.DisableHatchAnimation = false
 _G.SelectedLockedEggMult = "Any"
-_G.AutoTapper = false
-_G.ExecutedScript = nil
 _G.FastHatch = false
 _G.IsTeleportingToSpawn = false
 _G.IsScanningMode = false
@@ -145,9 +140,6 @@ local function findRoomDataByUID(roomUID)
 end
 
 local function findHallwayPosition(roomModel)
-	local hallwayPos = nil
-	local doorFrontPos = nil
-	
 	if not roomModel then
 		return nil, nil
 	end
@@ -160,9 +152,8 @@ local function findHallwayPosition(roomModel)
 				local doorCFrame = child.CFrame
 				local doorPosition = child.Position
 				local doorFront = doorCFrame.LookVector
-				doorFrontPos = doorPosition + (doorFront * 8) + Vector3.new(0, 2, 0)
-				hallwayPos = doorFrontPos
-				return hallwayPos, doorFrontPos
+				local doorFrontPos = doorPosition + (doorFront * 8) + Vector3.new(0, 2, 0)
+				return doorFrontPos, doorFrontPos
 			end
 		end
 	end
@@ -174,9 +165,8 @@ local function findHallwayPosition(roomModel)
 				local doorCFrame = door.CFrame
 				local doorPosition = door.Position
 				local doorFront = doorCFrame.LookVector
-				doorFrontPos = doorPosition + (doorFront * 6) + Vector3.new(0, 2, 0)
-				hallwayPos = doorFrontPos
-				return hallwayPos, doorFrontPos
+				local doorFrontPos = doorPosition + (doorFront * 6) + Vector3.new(0, 2, 0)
+				return doorFrontPos, doorFrontPos
 			end
 		end
 	end
@@ -185,16 +175,13 @@ local function findHallwayPosition(roomModel)
 	if hallwayParts then
 		for _, part in ipairs(hallwayParts:GetChildren()) do
 			if part:IsA("BasePart") then
-				hallwayPos = part.Position + Vector3.new(0, 2, 0)
-				return hallwayPos, doorFrontPos
+				return part.Position + Vector3.new(0, 2, 0), nil
 			end
 		end
 	end
 	
 	local centerCFrame = roomModel:GetBoundingBox()
-	hallwayPos = centerCFrame.Position + Vector3.new(0, 2, 0)
-	
-	return hallwayPos, doorFrontPos
+	return centerCFrame.Position + Vector3.new(0, 2, 0), nil
 end
 
 local function TPtoSpawn()
@@ -354,20 +341,6 @@ local function UnlockRoom(roomUID, targetPosition)
 	activeInstance:FireCustom("AbstractRoom_FireServer", roomUID, "UnlockDoors")
 	task.wait(1)
 	
-	local isUnlocked = true
-	for _, child in ipairs(lockedDoors:GetChildren()) do
-		local lock = child:FindFirstChild("Lock")
-		if lock and lock.Transparency < 1 then
-			isUnlocked = false
-			break
-		end
-	end
-	
-	if not isUnlocked then
-		activeInstance:FireCustom("AbstractRoom_FireServer", roomUID, "UnlockDoors")
-		task.wait(1)
-	end
-	
 	return true
 end
 
@@ -433,16 +406,11 @@ end
 local function getBestLockedEggRoom()
 	local bestRoom = nil
 	local maxMult = -1
-	local targetMult = (_G.SelectedLockedEggMult and _G.SelectedLockedEggMult ~= "Any")
-		and tonumber(string.match(_G.SelectedLockedEggMult, "%d+"))
-		or nil
 
 	for _, room in ipairs(_G.ScannedRooms) do
 		if room.Id == "DeepLockedEggRoom" and room.EggMultiplier ~= nil then
 			if (not room.ExpireTime) or (room.ExpireTime - workspace:GetServerTimeNow() > 0) then
-				local isMatch = (not targetMult) or room.EggMultiplier >= targetMult
-
-				if isMatch and room.EggMultiplier > maxMult then
+				if room.EggMultiplier > maxMult then
 					maxMult = room.EggMultiplier
 					bestRoom = room
 				end
@@ -755,19 +723,25 @@ local function Scan()
 		local spawnLocation = spawnRoom:FindFirstChild("DEEP_SPAWN_LOCATION")
 		if spawnLocation then
 			enterPosition = spawnLocation.Position
+			print("Spawn position saved at: " .. tostring(enterPosition))
 		end
 	end
 	
 	_G.AllBossRooms = {}
 	_G.AllMiniChestRooms = {}
 	_G.MiniChestCycleIndex = 1
-	_G.MiniChestActionType = "Cycle"
+	
+	-- Initial teleport to spawn to start scanning from there
+	TPtoSpawn()
+	task.wait(1)
 	
 	local function scanExistingRooms()
 		local folder = getGeneratedBackrooms()
 		if not folder then
 			return 
 		end
+
+		local newRoomsFound = 0
 
 		for _, room in ipairs(folder:GetChildren()) do
 			if room:GetAttribute("DeepRoom") == true then
@@ -794,9 +768,10 @@ local function Scan()
 
 						table.insert(_G.ScannedRooms, roomData)
 						_G.ScannedRoomsMap[roomUID] = roomData
+						newRoomsFound = newRoomsFound + 1
 						
 						if _G.UI then
-							_G.UI.UpdateStatus("Scanned " .. #_G.ScannedRooms .. " rooms (above ground)")
+							_G.UI.UpdateStatus("Scanned " .. #_G.ScannedRooms .. " rooms")
 							_G.UI.UpdateRooms(#_G.ScannedRooms)
 						end
 
@@ -811,14 +786,33 @@ local function Scan()
 				end
 			end
 		end
+		
+		return newRoomsFound
 	end
 
-	scanExistingRooms()
+	-- Initial scan to populate rooms
+	local initialRooms = scanExistingRooms()
+	print("Initial scan: " .. #_G.ScannedRooms .. " rooms found")
 
-	local maxLoops = 200
+	local maxLoops = 150
 	local loopCount = 0
 	local noNewRoomsCount = 0
-	local visitedCount = 0
+	local lastRoomCount = #_G.ScannedRooms
+	
+	-- Get character
+	local character = getCharacter()
+	if not character then
+		_G.IsScanning = false
+		_G.IsScanningMode = false
+		return
+	end
+	
+	local rootPart = character:FindFirstChild("HumanoidRootPart")
+	if not rootPart then
+		_G.IsScanning = false
+		_G.IsScanningMode = false
+		return
+	end
 	
 	while loopCount < maxLoops and #_G.ScannedRooms < 400 do
 		loopCount = loopCount + 1
@@ -828,19 +822,8 @@ local function Scan()
 			continue
 		end
 
-		local character = getCharacter()
-		if not character then
-			task.wait(0.1)
-			continue
-		end
-
-		local rootPart = character:FindFirstChild("HumanoidRootPart")
-		if not rootPart then
-			task.wait(0.1)
-			continue
-		end
-
-		local room = nil
+		-- Get an unvisited room
+		local targetRoom = nil
 		local minDistance = math.huge
 		
 		for _, r in ipairs(_G.ScannedRooms) do
@@ -848,23 +831,28 @@ local function Scan()
 				local dist = (r.Position - rootPart.Position).Magnitude
 				if dist < minDistance then
 					minDistance = dist
-					room = r
+					targetRoom = r
 				end
 			end
 		end
 
-		if not room then
+		-- If no unvisited rooms found, mark all as unvisited and try again
+		if not targetRoom then
 			if #_G.ScannedRooms > 0 then
-				room = _G.ScannedRooms[math.random(1, #_G.ScannedRooms)]
+				-- Reset visited rooms to find new ones
+				_G.VistedRooms = {}
+				print("All rooms visited, resetting to find more...")
+				-- Pick a random room
+				targetRoom = _G.ScannedRooms[math.random(1, #_G.ScannedRooms)]
 			else
+				print("No rooms found at all!")
 				break
 			end
 		end
 
-		if room then
-			_G.VistedRooms[room.uid] = true
-			visitedCount = visitedCount + 1
-				
+		if targetRoom then
+			_G.VistedRooms[targetRoom.uid] = true
+			
 			if not _G.Teleporting then
 				_G.Teleporting = true
 				local character = getCharacter()
@@ -873,10 +861,10 @@ local function Scan()
 					if rootPart then
 						local teleportPos = nil
 						
-						if room.HallwayPos then
-							teleportPos = Vector3.new(room.HallwayPos.X, SCAN_HEIGHT_OFFSET, room.HallwayPos.Z)
+						if targetRoom.HallwayPos then
+							teleportPos = Vector3.new(targetRoom.HallwayPos.X, SCAN_HEIGHT_OFFSET, targetRoom.HallwayPos.Z)
 						else
-							teleportPos = Vector3.new(room.Position.X, SCAN_HEIGHT_OFFSET, room.Position.Z)
+							teleportPos = Vector3.new(targetRoom.Position.X, SCAN_HEIGHT_OFFSET, targetRoom.Position.Z)
 						end
 						
 						Network.Fire("RequestStreaming", teleportPos)
@@ -892,26 +880,39 @@ local function Scan()
 			task.wait(0.5)
 			RunService.RenderStepped:Wait()
 				
-			local beforeCount = #_G.ScannedRooms
-			scanExistingRooms()
-			local afterCount = #_G.ScannedRooms
+			local newRooms = scanExistingRooms()
 				
-			if afterCount == beforeCount then
-				noNewRoomsCount = noNewRoomsCount + 1
-			else
+			if newRooms and newRooms > 0 then
 				noNewRoomsCount = 0
+				print("Found " .. newRooms .. " new rooms! Total: " .. #_G.ScannedRooms)
+				print("Boss Rooms: " .. #_G.AllBossRooms .. ", Mini Chests: " .. #_G.AllMiniChestRooms)
+			else
+				noNewRoomsCount = noNewRoomsCount + 1
 			end
 				
-			if noNewRoomsCount > 5 then
+			-- If no new rooms found for a while, teleport to spawn to refresh
+			if noNewRoomsCount > 8 then
+				print("No new rooms found, refreshing at spawn...")
 				TPtoSpawn()
-				task.wait(0.5)
+				task.wait(1)
 				noNewRoomsCount = 0
+				-- Re-scan from spawn
 				scanExistingRooms()
+			end
+			
+			-- Reset visited rooms periodically to find new ones that might have loaded
+			if loopCount % 20 == 0 then
+				-- Only reset visited if we're not finding new rooms
+				if #_G.ScannedRooms == lastRoomCount then
+					_G.VistedRooms = {}
+					print("Reset visited rooms to find new ones...")
+				end
+				lastRoomCount = #_G.ScannedRooms
 			end
 		end
 		
 		if loopCount % 10 == 0 then
-			print("Scanned " .. #_G.ScannedRooms .. " rooms so far...")
+			print("Scan progress: " .. #_G.ScannedRooms .. " rooms (" .. loopCount .. "/" .. maxLoops .. ")")
 		end
 	end
 
@@ -1365,9 +1366,6 @@ task.spawn(function()
 				TeleportToMiniChestAbove(room.uid, index, "Next")
 				autoMiniLastActionTime = currentTime
 				autoMiniPhase = "Nearest"
-				if _G.UI and _G.UI.UpdateMiniCycle then
-					_G.UI.UpdateMiniCycle(index, #_G.AllMiniChestRooms, "Next")
-				end
 				task.wait(1)
 				continue
 			end
@@ -1384,9 +1382,6 @@ task.spawn(function()
 				TeleportToMiniChestAbove(room.uid, index, "Nearest")
 				autoMiniLastActionTime = tick()
 				autoMiniPhase = "WaitingAfterNearest"
-				if _G.UI and _G.UI.UpdateMiniCycle then
-					_G.UI.UpdateMiniCycle(index, #_G.AllMiniChestRooms, "Nearest")
-				end
 			end
 		end
 	end
