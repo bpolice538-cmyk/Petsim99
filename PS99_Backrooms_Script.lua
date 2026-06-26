@@ -16,6 +16,8 @@ end
 
 local Network = require(game.ReplicatedStorage.Library.Client.Network)
 local PlayerPet = require(game.ReplicatedStorage.Library.Client.PlayerPet)
+local InstancingCmds = require(game.ReplicatedStorage.Library.Client.InstancingCmds)
+local MiscItem = require(game.ReplicatedStorage.Library.Items.MiscItem)
 
 local localPlayer = Players.LocalPlayer
 local enterPosition = nil
@@ -44,7 +46,6 @@ _G.AutoClickerInterval = 5
 _G.AllBossRooms = {}
 _G.AllMiniChestRooms = {}
 _G.ShowDirectionGuide = true
-_G.ScanFromRoof = true -- NEW: Scan from roof to be invisible
 
 -- ============================================
 -- HELPER FUNCTIONS
@@ -113,6 +114,61 @@ local function findRoomDataByUID(roomUID)
 	return _G.ScannedRoomsMap[roomUID]
 end
 
+local function findHallwayPosition(roomModel)
+	if not roomModel then
+		return nil, nil
+	end
+	
+	-- Check for LockedDoors first
+	local lockedDoors = roomModel:FindFirstChild("LockedDoors")
+	if lockedDoors then
+		for _, child in ipairs(lockedDoors:GetChildren()) do
+			local lock = child:FindFirstChild("Lock")
+			if lock and lock.Transparency < 1 then
+				local doorCFrame = child.CFrame
+				local doorPosition = child.Position
+				local doorFront = doorCFrame.LookVector
+				local frontPos = doorPosition + (doorFront * 8) + Vector3.new(0, 2, 0)
+				return frontPos, frontPos
+			end
+		end
+	end
+	
+	-- Check for regular Doors
+	local doors = roomModel:FindFirstChild("Doors")
+	if doors then
+		for _, door in ipairs(doors:GetChildren()) do
+			if door:IsA("BasePart") then
+				local doorCFrame = door.CFrame
+				local doorPosition = door.Position
+				local doorFront = doorCFrame.LookVector
+				local frontPos = doorPosition + (doorFront * 6) + Vector3.new(0, 2, 0)
+				return frontPos, frontPos
+			end
+		end
+	end
+	
+	-- Check for HallwayParts
+	local hallwayParts = roomModel:FindFirstChild("HallwayParts")
+	if hallwayParts then
+		for _, part in ipairs(hallwayParts:GetChildren()) do
+			if part:IsA("BasePart") then
+				return part.Position + Vector3.new(0, 2, 0), nil
+			end
+		end
+	end
+	
+	-- Check for BREAK_ZONE (boss rooms)
+	local breakZone = roomModel:FindFirstChild("BREAK_ZONE")
+	if breakZone then
+		return breakZone:GetPivot().Position + Vector3.new(0, 2, 0), nil
+	end
+	
+	-- Fallback: Room center
+	local centerCFrame = roomModel:GetBoundingBox()
+	return centerCFrame.Position + Vector3.new(0, 2, 0), nil
+end
+
 local function TPtoSpawn()
 	if not canDoAction() then
 		return
@@ -153,79 +209,192 @@ local function TPtoSpawn()
 end
 
 -- ============================================
--- TELEPORT TO ROOF OF ANY ROOM (FOR SCANNING)
+-- KEY CHECK
 -- ============================================
-local function TeleportToRoof(roomUID)
-	if _G.Teleporting then
-		return
+local function keyCheck()
+	local keyItem = MiscItem("Deep Backrooms Crayon Key")
+	if keyItem and keyItem:HasAny() then
+		return true
 	end
+	return false
+end
 
-	_G.Teleporting = true
+-- ============================================
+-- WALK THROUGH HALLWAY / DOOR (FOR LOCKED EGGS)
+-- ============================================
+local function WalkThroughHallway(startPos, targetPos)
+	local character = getCharacter()
+	if not character then return false end
+	
+	local rootPart = character:FindFirstChild("HumanoidRootPart")
+	if not rootPart then return false end
+	
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if not humanoid then return false end
+	
+	humanoid:MoveTo(targetPos)
+	
+	local startTime = tick()
+	local timeout = 20
+	local lastPos = rootPart.Position
+	local stuckCount = 0
+	
+	while tick() - startTime < timeout do
+		task.wait(0.1)
+		local currentPos = rootPart.Position
+		local distToTarget = (currentPos - targetPos).Magnitude
+		
+		if distToTarget < 5 then
+			print("✅ Reached target!")
+			return true
+		end
+		
+		if (currentPos - lastPos).Magnitude < 0.3 then
+			stuckCount = stuckCount + 1
+			if stuckCount > 20 then
+				print("⚠️ Stuck! Teleporting to target...")
+				rootPart.Anchored = true
+				rootPart.CFrame = CFrame.new(targetPos)
+				task.wait(0.2)
+				rootPart.Anchored = false
+				return true
+			end
+		else
+			stuckCount = 0
+		end
+		
+		lastPos = currentPos
+	end
+	
+	print("⚠️ Timeout! Teleporting to target...")
+	rootPart.Anchored = true
+	rootPart.CFrame = CFrame.new(targetPos)
+	task.wait(0.2)
+	rootPart.Anchored = false
+	return true
+end
+
+-- ============================================
+-- UNLOCK LOCKED EGG ROOM WITH WALKING
+-- ============================================
+local function UnlockLockedEggRoom(roomUID, targetPosition)
+	if _G.IsScanning == true then
+		return false
+	end
 
 	local character = getCharacter()
 	if not character then
-		_G.Teleporting = false
-		return
+		return false
 	end
 
-	local rootPart = character:FindFirstChild("HumanoidRootPart")
-	if not rootPart then
-		_G.Teleporting = false
-		return
+	local ownsKey = keyCheck()
+	if not ownsKey then
+		print("⚠️ No key found! Cannot unlock room.")
+		return false
+	end
+
+	local activeInstance = InstancingCmds.Get()
+	if not activeInstance then
+		return false
 	end
 
 	local roomData = findRoomDataByUID(roomUID)
-	if not roomData then
-		warn("NO ROOM DATA")
-		_G.Teleporting = false
-		return
+	if not roomData then 
+		return false
 	end
 
 	local roomModel = roomData.Model
-	local pos = roomData.Position
+	local lockedDoors = roomModel:FindFirstChild("LockedDoors")
+	if not lockedDoors then 
+		print("⚠️ Room is not locked!")
+		return true
+	end
 
-	-- Find the highest point of the room for roof position
-	local centerX = pos.X
-	local centerZ = pos.Z
-	local highestPoint = pos.Y + 30 -- Default height
+	-- Find the lock and door
+	local lockedPart = nil
+	local doorPart = nil
+	for _, child in ipairs(lockedDoors:GetChildren()) do
+		local lock = child:FindFirstChild("Lock")
+		if lock and lock.Transparency < 1 then
+			lockedPart = lock
+			doorPart = child
+			break
+		end
+	end
+
+	if not lockedPart then
+		print("✅ Room already unlocked!")
+		return true
+	end
+
+	-- Get door position and direction
+	local doorPosition = doorPart and doorPart.Position or lockedPart.Position
+	local doorCFrame = doorPart and doorPart.CFrame or CFrame.new(doorPosition)
+	local doorFront = doorCFrame.LookVector
 	
-	local roomParts = roomModel:GetDescendants()
-	for _, part in ipairs(roomParts) do
-		if part:IsA("BasePart") then
-			local partPos = part.Position
-			local distFromCenter = math.sqrt((partPos.X - centerX)^2 + (partPos.Z - centerZ)^2)
-			if distFromCenter < 40 and partPos.Y > highestPoint then
-				highestPoint = partPos.Y + 20 -- Stand on roof
-			end
+	-- Position in front of door (hallway side)
+	local hallwayPos = doorPosition + (doorFront * 8) + Vector3.new(0, 2, 0)
+	local doorFrontPos = doorPosition + (doorFront * 4) + Vector3.new(0, 2, 0)
+	
+	print("🚪 Door Position: " .. tostring(doorPosition))
+	print("🚪 Hallway Position: " .. tostring(hallwayPos))
+	
+	local rootPart = character:FindFirstChild("HumanoidRootPart")
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	
+	-- Teleport to hallway in front of door
+	if rootPart then
+		Network.Fire("RequestStreaming", hallwayPos)
+		rootPart.Anchored = true
+		rootPart.CFrame = CFrame.new(hallwayPos)
+		task.wait(0.5)
+		rootPart.Anchored = false
+	end
+	
+	print("🔓 Walking to door to unlock...")
+	
+	-- Walk to door front
+	if humanoid then
+		humanoid:MoveTo(doorFrontPos)
+		task.wait(1.5)
+	end
+	
+	-- Unlock the door
+	print("🔓 Unlocking door with key...")
+	activeInstance:FireCustom("AbstractRoom_FireServer", roomUID, "UnlockDoors")
+	task.wait(1.5)
+	
+	-- Check if door is unlocked
+	local isUnlocked = true
+	for _, child in ipairs(lockedDoors:GetChildren()) do
+		local lock = child:FindFirstChild("Lock")
+		if lock and lock.Transparency < 1 then
+			isUnlocked = false
+			break
 		end
 	end
 	
-	-- Roof position (invisible to players on ground)
-	local roofPos = Vector3.new(centerX, highestPoint, centerZ)
+	if not isUnlocked then
+		print("⚠️ Door unlock failed! Trying again...")
+		activeInstance:FireCustom("AbstractRoom_FireServer", roomUID, "UnlockDoors")
+		task.wait(1)
+	end
 	
-	-- Force streaming
-	Network.Fire("RequestStreaming", pos)
-	Network.Fire("RequestStreaming", roofPos)
-
-	-- Clear any existing forces
-	rootPart.Anchored = true
-	rootPart.Velocity = Vector3.new(0, 0, 0)
-	rootPart.RotVelocity = Vector3.new(0, 0, 0)
+	-- Walk through to the egg
+	local targetPos = targetPosition or roomData.Position + Vector3.new(0, 2, 0)
+	print("🚶 Walking through door to egg position: " .. tostring(targetPos))
 	
-	-- Teleport to roof position
-	rootPart.CFrame = CFrame.new(roofPos)
+	-- Walk through the door
+	if humanoid then
+		humanoid:MoveTo(targetPos)
+		task.wait(0.5)
+	end
 	
-	-- Wait for server to sync
-	task.wait(0.5)
+	-- Walk through hallway to target
+	WalkThroughHallway(doorFrontPos, targetPos)
 	
-	-- Unanchor
-	rootPart.Anchored = false
-
-	_G.Teleporting = false
-	
-	isOnRoof = true
-	
-	print("🏠 Now on ROOF of room: " .. (roomData.Id or "Unknown"))
+	print("✅ Room unlocked and walked to egg!")
+	return true
 end
 
 -- ============================================
@@ -276,25 +445,32 @@ local function TeleportToMiniChestRoof(roomUID)
 		end
 	end
 	
+	-- Center roof position
 	local roofPos = Vector3.new(centerX, highestPoint, centerZ)
 	
+	-- Force streaming for both positions
 	Network.Fire("RequestStreaming", pos)
 	Network.Fire("RequestStreaming", roofPos)
 
+	-- Clear any existing forces
 	rootPart.Anchored = true
 	rootPart.Velocity = Vector3.new(0, 0, 0)
 	rootPart.RotVelocity = Vector3.new(0, 0, 0)
 	
+	-- Teleport to roof position
 	rootPart.CFrame = CFrame.new(roofPos)
 	
+	-- Wait for server to sync
 	task.wait(0.5)
 	
+	-- Unanchor
 	rootPart.Anchored = false
 
 	_G.Teleporting = false
 	
 	isOnRoof = true
 	
+	-- Check if this is actually a mini chest room
 	if roomData.Id and string.match(roomData.Id, "DeepChestRoom") ~= nil then
 		isInMiniChestRoom = true
 		currentMiniChestRoomUID = roomUID
@@ -376,7 +552,7 @@ local function TeleportToBossOutside(roomUID)
 end
 
 -- ============================================
--- TELEPORT TO BOSS ROOM (INSIDE - FOR AUTO FARM)
+-- TELEPORT TO ROOM (HANDLES LOCKED EGG ROOMS)
 -- ============================================
 local function TeleportToRoom(roomUID)
 	if _G.Teleporting then
@@ -405,16 +581,41 @@ local function TeleportToRoom(roomUID)
 	end
 
 	local roomModel = roomData.Model
-	local pos = roomData.Position
+	local roomId = roomData.Id
+
+	-- Check if it's a locked egg room
+	if roomId == "DeepLockedEggRoom" then
+		-- Use the unlock and walk method
+		local targetPos = nil
+		local eggObj = roomModel:FindFirstChild("Backrooms Egg")
+		if eggObj then
+			targetPos = eggObj.Position + Vector3.new(0, 2, 0)
+		else
+			targetPos = roomData.Position + Vector3.new(0, 2, 0)
+		end
+		
+		_G.Teleporting = false
+		local success = UnlockLockedEggRoom(roomUID, targetPos)
+		return
+	end
+
+	-- For free egg rooms, teleport directly
+	local targetPos = roomData.Position + Vector3.new(0, 3, 0)
+	
+	-- Check for egg object in free egg room
+	local eggObj = roomModel:FindFirstChild("Backrooms Egg")
+	if eggObj then
+		targetPos = eggObj.Position + Vector3.new(0, 2, 0)
+	end
 
 	local forceField = Instance.new("ForceField")
 	forceField.Visible = false
 	forceField.Parent = character
 
-	Network.Fire("RequestStreaming", pos)
+	Network.Fire("RequestStreaming", targetPos)
 
 	rootPart.Anchored = true
-	rootPart.CFrame = CFrame.new(pos) + Vector3.new(0, 3, 0)
+	rootPart.CFrame = CFrame.new(targetPos)
 
 	task.delay(1.5, function()
 		if forceField and forceField.Parent then 
@@ -423,19 +624,12 @@ local function TeleportToRoom(roomUID)
 		rootPart.Anchored = false
 	end)
 
-	task.wait(0.5)
-	local targetObj = roomModel:FindFirstChild("Sign")
-		or roomModel.PrimaryPart
-		or roomModel:FindFirstChildWhichIsA("BasePart", true)
-
-	rootPart.CFrame = (targetObj and targetObj.CFrame or CFrame.new(pos)) + Vector3.new(0, 15, 0) 
-
 	_G.Teleporting = false
-	print("📌 Teleported INSIDE Boss Room!")
+	print("✅ Teleported to room!")
 end
 
 -- ============================================
--- SCAN FUNCTION - WITH ROOF SCANNING (INVISIBLE)
+-- SCAN FUNCTION
 -- ============================================
 local function Scan()
 	if _G.IsScanning == true then
@@ -446,10 +640,10 @@ local function Scan()
 	_G.IsScanning = true
 
 	local message = createMessage("Exploring the backrooms...")
-	print("Starting FAST scan from ROOF (invisible to players)...")
+	print("Starting FAST scan...")
 	
 	if _G.UI then
-		_G.UI.UpdateStatus("Scanning from roof...")
+		_G.UI.UpdateStatus("Scanning...")
 	end
 
 	local folder = getGeneratedBackrooms()
@@ -490,20 +684,24 @@ local function Scan()
 
 					if not existing then
 						local mult = room:GetAttribute("EggMultiplier") or 0
+						local hallwayPos, doorFrontPos = findHallwayPosition(room)
+						
 						local roomData = {
 							uid = roomUID,
 							Id = roomId,
 							Model = room,
 							CFrame = roomCFrame,
 							Position = roomCFrame.Position,
-							EggMultiplier = mult > 0 and mult or nil
+							EggMultiplier = mult > 0 and mult or nil,
+							HallwayPos = hallwayPos,
+							DoorFrontPos = doorFrontPos
 						}
 
 						table.insert(_G.ScannedRooms, roomData)
 						_G.ScannedRoomsMap[roomUID] = roomData
 						
 						if _G.UI then
-							_G.UI.UpdateStatus("Scanned " .. #_G.ScannedRooms .. " rooms from roof")
+							_G.UI.UpdateStatus("Scanned " .. #_G.ScannedRooms .. " rooms")
 							_G.UI.UpdateRooms(#_G.ScannedRooms)
 						end
 
@@ -515,6 +713,14 @@ local function Scan()
 						if string.match(roomId, "DeepChestRoom") ~= nil then
 							table.insert(_G.AllMiniChestRooms, roomData)
 							print("📦 Found Mini Chest Room #" .. #_G.AllMiniChestRooms)
+						end
+						
+						if string.match(roomId, "DeepFreeEggRoom") ~= nil then
+							print("🥚 Found Free Egg Room #" .. #_G.ScannedRooms)
+						end
+						
+						if string.match(roomId, "DeepLockedEggRoom") ~= nil then
+							print("🔒 Found Locked Egg Room #" .. #_G.ScannedRooms)
 						end
 					end
 				end
@@ -578,46 +784,26 @@ local function Scan()
 			_G.VistedRooms[room.uid] = true
 			visitedCount = visitedCount + 1
 			
-			-- TELEPORT TO ROOF OF ROOM (INVISIBLE TO PLAYERS)
-			if not _G.Teleporting then
-				_G.Teleporting = true
-				local character = getCharacter()
-				if character then
-					local rootPart = character:FindFirstChild("HumanoidRootPart")
-					if rootPart then
-						-- Find the highest point of the room
-						local roomModel = room.Model
-						local pos = room.Position
-						local centerX = pos.X
-						local centerZ = pos.Z
-						local highestPoint = pos.Y + 30
-						
-						local roomParts = roomModel:GetDescendants()
-						for _, part in ipairs(roomParts) do
-							if part:IsA("BasePart") then
-								local partPos = part.Position
-								local distFromCenter = math.sqrt((partPos.X - centerX)^2 + (partPos.Z - centerZ)^2)
-								if distFromCenter < 40 and partPos.Y > highestPoint then
-									highestPoint = partPos.Y + 20
-								end
-							end
+			if room.Id and string.match(room.Id, "DeepChestRoom") ~= nil then
+				TeleportToMiniChestRoof(room.uid)
+			else
+				if not _G.Teleporting then
+					_G.Teleporting = true
+					local character = getCharacter()
+					if character then
+						local rootPart = character:FindFirstChild("HumanoidRootPart")
+						if rootPart then
+							Network.Fire("RequestStreaming", room.Position)
+							rootPart.Anchored = true
+							rootPart.CFrame = CFrame.new(room.Position) + Vector3.new(0, 3, 0)
+							task.wait(0.2)
+							rootPart.Anchored = false
 						end
-						
-						local roofPos = Vector3.new(centerX, highestPoint, centerZ)
-						
-						Network.Fire("RequestStreaming", room.Position)
-						Network.Fire("RequestStreaming", roofPos)
-						
-						rootPart.Anchored = true
-						rootPart.CFrame = CFrame.new(roofPos)
-						task.wait(0.3)
-						rootPart.Anchored = false
 					end
+					_G.Teleporting = false
 				end
-				_G.Teleporting = false
 			end
-			
-			task.wait(0.3)
+			task.wait(0.2)
 			RunService.RenderStepped:Wait()
 			
 			local beforeCount = #_G.ScannedRooms
@@ -629,8 +815,6 @@ local function Scan()
 			else
 				noNewRoomsCount = 0
 				print("Found " .. (afterCount - beforeCount) .. " new rooms! Total: " .. afterCount)
-				print("📦 Mini Chest Rooms total: " .. #_G.AllMiniChestRooms)
-				print("👑 Boss Rooms total: " .. #_G.AllBossRooms)
 			end
 			
 			if noNewRoomsCount > 5 then
@@ -657,13 +841,12 @@ local function Scan()
 	game.Debris:AddItem(message, 0)
 	TPtoSpawn()
 	
-	print("=== FAST SCAN FROM ROOF FINISHED ===")
+	print("=== FAST SCAN FINISHED ===")
 	print("Total rooms scanned: " .. #_G.ScannedRooms)
 	print("👑 Boss Rooms found: " .. #_G.AllBossRooms)
 	print("📦 Mini Chest Rooms found: " .. #_G.AllMiniChestRooms)
 	print("Rooms visited: " .. visitedCount)
-	print("📍 Scanned from ROOF - Invisible to players!")
-	print("=====================================")
+	print("=========================")
 end
 
 -- ============================================
@@ -1013,7 +1196,146 @@ local function UpdateDirectionGuide()
 end
 
 -- ============================================
--- CREATE UI
+-- ANTI AFK
+-- ============================================
+local function antiAFK()
+	local character = getCharacter()
+	if not character then return end
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if not humanoid then return end
+	humanoid:Jump()
+	local rootPart = character:FindFirstChild("HumanoidRootPart")
+	if rootPart then
+		local currentPos = rootPart.Position
+		rootPart.CFrame = CFrame.new(currentPos + Vector3.new(0, 0.1, 0))
+		task.wait(0.05)
+		rootPart.CFrame = CFrame.new(currentPos)
+	end
+end
+
+task.spawn(function()
+	while true do
+		task.wait(30)
+		if not _G.AntiAFK then continue end
+		pcall(antiAFK)
+		pcall(function()
+			VirtualUser:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+			task.wait(0.1)
+			VirtualUser:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+		end)
+	end
+end)
+
+-- ============================================
+-- AUTO BOSS FARM LOOP
+-- ============================================
+task.spawn(function()
+	while true do
+		task.wait(0.5)
+		if not _G.AutoMiniBoss then continue end
+		if not canDoAction() then continue end
+		local character = getCharacter()
+		if not character then continue end
+		local rootPart = character:FindFirstChild("HumanoidRootPart")
+		if not rootPart then continue end
+		
+		local targetRoom = nil
+		local minDist = math.huge
+		for _, boss in ipairs(_G.AllBossRooms) do
+			local dist = (boss.Position - rootPart.Position).Magnitude
+			if dist < minDist then
+				minDist = dist
+				targetRoom = boss
+			end
+		end
+		
+		if targetRoom then
+			local uid = targetRoom.uid
+			local roomModel = targetRoom.Model
+			local pos = targetRoom.Position
+			local breakZone = roomModel:FindFirstChild("BREAK_ZONE")
+			if breakZone then pos = breakZone:GetPivot().Position end
+			local isInRoom = (rootPart.Position - pos).Magnitude <= 130
+			if (not isInRoom) then
+				TeleportToRoom(uid)
+				task.wait(1)
+			else
+				local targetBreakable = nil
+				local targetType = nil
+				local breakablesFolder = workspace:FindFirstChild("__THINGS")
+				if breakablesFolder then breakablesFolder = breakablesFolder:FindFirstChild("Breakables") end
+				if breakablesFolder then
+					local breakables = breakablesFolder:GetChildren()
+					local searchRadius = _G.ChestSearchRadius
+					for _, b in ipairs(breakables) do
+						local bId = b:GetAttribute("BreakableID")
+						if bId == "Daydream Mimic Chest2" then
+							local bPos = b:GetPivot().Position
+							local distance = (bPos - pos).Magnitude
+							if distance < searchRadius then
+								targetBreakable = b
+								targetType = "Chest"
+								break
+							end
+						end
+					end
+					if not targetBreakable then
+						for _, b in ipairs(breakables) do
+							local bId = b:GetAttribute("BreakableID")
+							if bId == "Daydream Mimic Boss2" then
+								local bPos = b:GetPivot().Position
+								local distance = (bPos - pos).Magnitude
+								if distance < searchRadius then
+									targetBreakable = b
+									targetType = "Boss"
+									break
+								end
+							end
+						end
+					end
+				end
+				if targetBreakable then
+					local bUID = targetBreakable:GetAttribute("BreakableUID")
+					local bPos = targetBreakable:GetPivot().Position
+					local humanoid = character:FindFirstChildOfClass("Humanoid")
+					if targetType == "Chest" then
+						if humanoid then humanoid:MoveTo(bPos) end
+					elseif targetType == "Boss" then
+						if humanoid then humanoid:MoveTo(rootPart.Position) end
+					end
+					Network.UnreliableFire("Breakables_PlayerDealDamage", bUID)
+					local activePets = PlayerPet.GetByPlayer(localPlayer)
+					for _, pet in pairs(activePets) do
+						if pet.cpet then pet:SetTarget(targetBreakable) end
+					end
+				end
+			end
+		else
+			print("🔍 No Boss Rooms found.")
+			task.wait(5)
+		end
+	end
+end)
+
+-- Auto Break MINI CHEST Loop
+task.spawn(function()
+	while true do
+		task.wait(0.3)
+		if not _G.AutoBreakMiniChest then continue end
+		AutoBreakMiniChestRoom()
+	end
+end)
+
+-- Direction Guide Update Loop
+task.spawn(function()
+	while true do
+		task.wait(0.5)
+		pcall(UpdateDirectionGuide)
+	end
+end)
+
+-- ============================================
+-- CREATE UI - RETRACTABLE TO ICON
 -- ============================================
 local function CreateUI()
 	local screenGui = Instance.new("ScreenGui")
@@ -1023,8 +1345,8 @@ local function CreateUI()
 	
 	local mainFrame = Instance.new("Frame")
 	mainFrame.Name = "MainFrame"
-	mainFrame.Size = UDim2.new(0, 200, 0, 150)
-	mainFrame.Position = UDim2.new(0, 5, 0.5, -75)
+	mainFrame.Size = UDim2.new(0, 200, 0, 170)
+	mainFrame.Position = UDim2.new(0, 5, 0.5, -85)
 	mainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 30)
 	mainFrame.BackgroundTransparency = 0.1
 	mainFrame.BorderSizePixel = 2
@@ -1250,8 +1572,52 @@ local function CreateUI()
 		return divider
 	end
 	
-	createButton("🔍 Scan (Roof)", function() 
+	createButton("🔍 Scan", function() 
 		Scan()
+	end)
+	
+	createButton("🥚 TP Best Free Egg", function()
+		if (not canDoAction()) then return end
+		if #_G.ScannedRooms == 0 then
+			print("⚠️ Scan first!")
+			return
+		end
+		local bestRoom = nil
+		local bestMult = -1
+		for _, room in ipairs(_G.ScannedRooms) do
+			if string.match(room.Id, "DeepFreeEggRoom") ~= nil and room.EggMultiplier and room.EggMultiplier > bestMult then
+				bestMult = room.EggMultiplier
+				bestRoom = room
+			end
+		end
+		if bestRoom then
+			print("🥚 Teleporting to Best Free Egg Room with " .. bestMult .. "x multiplier")
+			TeleportToRoom(bestRoom.uid)
+		else
+			print("❌ No Free Egg Room found!")
+		end
+	end)
+	
+	createButton("🔒 TP Best Locked Egg", function()
+		if (not canDoAction()) then return end
+		if #_G.ScannedRooms == 0 then
+			print("⚠️ Scan first!")
+			return
+		end
+		local bestRoom = nil
+		local bestMult = -1
+		for _, room in ipairs(_G.ScannedRooms) do
+			if room.Id == "DeepLockedEggRoom" and room.EggMultiplier and room.EggMultiplier > bestMult then
+				bestMult = room.EggMultiplier
+				bestRoom = room
+			end
+		end
+		if bestRoom then
+			print("🔒 Teleporting to Best Locked Egg Room with " .. bestMult .. "x multiplier")
+			TeleportToRoom(bestRoom.uid)
+		else
+			print("❌ No Locked Egg Room found!")
+		end
 	end)
 	
 	createButton("🚪 TP Boss (200 studs)", function()
@@ -1444,8 +1810,8 @@ local function CreateUI()
 		else
 			retractButton.Text = "🗕"
 			contentFrame.Visible = true
-			mainFrame.Size = UDim2.new(0, 200, 0, 150)
-			mainFrame.Position = UDim2.new(0, 5, 0.5, -75)
+			mainFrame.Size = UDim2.new(0, 200, 0, 170)
+			mainFrame.Position = UDim2.new(0, 5, 0.5, -85)
 			title.Text = "🎮 BR UI"
 		end
 	end)
@@ -1596,150 +1962,14 @@ local function CreateUI()
 	return screenGui
 end
 
--- ============================================
--- AUTO BOSS FARM LOOP
--- ============================================
-task.spawn(function()
-	while true do
-		task.wait(0.5)
-		if not _G.AutoMiniBoss then continue end
-		if not canDoAction() then continue end
-		local character = getCharacter()
-		if not character then continue end
-		local rootPart = character:FindFirstChild("HumanoidRootPart")
-		if not rootPart then continue end
-		
-		local targetRoom = nil
-		local minDist = math.huge
-		for _, boss in ipairs(_G.AllBossRooms) do
-			local dist = (boss.Position - rootPart.Position).Magnitude
-			if dist < minDist then
-				minDist = dist
-				targetRoom = boss
-			end
-		end
-		
-		if targetRoom then
-			local uid = targetRoom.uid
-			local roomModel = targetRoom.Model
-			local pos = targetRoom.Position
-			local breakZone = roomModel:FindFirstChild("BREAK_ZONE")
-			if breakZone then pos = breakZone:GetPivot().Position end
-			local isInRoom = (rootPart.Position - pos).Magnitude <= 130
-			if (not isInRoom) then
-				TeleportToRoom(uid)
-				task.wait(1)
-			else
-				local targetBreakable = nil
-				local targetType = nil
-				local breakablesFolder = workspace:FindFirstChild("__THINGS")
-				if breakablesFolder then breakablesFolder = breakablesFolder:FindFirstChild("Breakables") end
-				if breakablesFolder then
-					local breakables = breakablesFolder:GetChildren()
-					local searchRadius = _G.ChestSearchRadius
-					for _, b in ipairs(breakables) do
-						local bId = b:GetAttribute("BreakableID")
-						if bId == "Daydream Mimic Chest2" then
-							local bPos = b:GetPivot().Position
-							local distance = (bPos - pos).Magnitude
-							if distance < searchRadius then
-								targetBreakable = b
-								targetType = "Chest"
-								break
-							end
-						end
-					end
-					if not targetBreakable then
-						for _, b in ipairs(breakables) do
-							local bId = b:GetAttribute("BreakableID")
-							if bId == "Daydream Mimic Boss2" then
-								local bPos = b:GetPivot().Position
-								local distance = (bPos - pos).Magnitude
-								if distance < searchRadius then
-									targetBreakable = b
-									targetType = "Boss"
-									break
-								end
-							end
-						end
-					end
-				end
-				if targetBreakable then
-					local bUID = targetBreakable:GetAttribute("BreakableUID")
-					local bPos = targetBreakable:GetPivot().Position
-					local humanoid = character:FindFirstChildOfClass("Humanoid")
-					if targetType == "Chest" then
-						if humanoid then humanoid:MoveTo(bPos) end
-					elseif targetType == "Boss" then
-						if humanoid then humanoid:MoveTo(rootPart.Position) end
-					end
-					Network.UnreliableFire("Breakables_PlayerDealDamage", bUID)
-					local activePets = PlayerPet.GetByPlayer(localPlayer)
-					for _, pet in pairs(activePets) do
-						if pet.cpet then pet:SetTarget(targetBreakable) end
-					end
-				end
-			end
-		else
-			print("🔍 No Boss Rooms found.")
-			task.wait(5)
-		end
-	end
-end)
-
--- Auto Break MINI CHEST Loop
-task.spawn(function()
-	while true do
-		task.wait(0.3)
-		if not _G.AutoBreakMiniChest then continue end
-		AutoBreakMiniChestRoom()
-	end
-end)
-
--- Direction Guide Update Loop
-task.spawn(function()
-	while true do
-		task.wait(0.5)
-		pcall(UpdateDirectionGuide)
-	end
-end)
-
--- ANTI AFK
-local function antiAFK()
-	local character = getCharacter()
-	if not character then return end
-	local humanoid = character:FindFirstChildOfClass("Humanoid")
-	if not humanoid then return end
-	humanoid:Jump()
-	local rootPart = character:FindFirstChild("HumanoidRootPart")
-	if rootPart then
-		local currentPos = rootPart.Position
-		rootPart.CFrame = CFrame.new(currentPos + Vector3.new(0, 0.1, 0))
-		task.wait(0.05)
-		rootPart.CFrame = CFrame.new(currentPos)
-	end
-end
-
-task.spawn(function()
-	while true do
-		task.wait(30)
-		if not _G.AntiAFK then continue end
-		pcall(antiAFK)
-		pcall(function()
-			VirtualUser:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
-			task.wait(0.1)
-			VirtualUser:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
-		end)
-	end
-end)
-
 -- Create UI
 local ui = CreateUI()
 print("Backroom UI loaded!")
-print("🔍 FAST SCAN FROM ROOF ACTIVATED")
-print("📍 You will be INVISIBLE to players on the ground!")
+print("🔍 FAST SCAN ACTIVATED")
 print("👑 Boss Rooms found: 0")
 print("📦 Mini Chest Rooms found: 0")
+print("🥚 Free Egg Rooms: 0")
+print("🔒 Locked Egg Rooms: 0")
 print("🚪 TP Boss (200 studs) - Teleports 200 studs away from boss")
 print("📦 TP Mini (Roof) - Teleports to CENTER roof of mini chest")
 print("🐾 Mini (Loop) - Will loop through ALL mini chest rooms")
