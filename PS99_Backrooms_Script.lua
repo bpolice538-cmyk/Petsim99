@@ -60,8 +60,8 @@ _G.FastHatch = false
 _G.IsTeleportingToSpawn = false
 _G.IsScanningMode = false
 
--- SCAN HEIGHT - 50 studs above ground (invisible but loads rooms)
-local SCAN_HEIGHT_OFFSET = 50
+-- SCAN AT ROOF LEVEL - Just above the ceiling (25 studs)
+local SCAN_HEIGHT_OFFSET = 25
 local NORMAL_HEIGHT_OFFSET = 2
 
 local autoMiniLastActionTime = 0
@@ -735,7 +735,7 @@ local function TeleportAndLoad(targetPos)
 	
 	_G.Teleporting = true
 	
-	-- Teleport to position
+	-- Teleport to position (roof level)
 	Network.Fire("RequestStreaming", targetPos)
 	rootPart.Anchored = true
 	rootPart.CFrame = CFrame.new(targetPos)
@@ -743,7 +743,7 @@ local function TeleportAndLoad(targetPos)
 	rootPart.Anchored = false
 	
 	-- Wait for rooms to load
-	task.wait(1.0)
+	task.wait(0.8)
 	
 	_G.Teleporting = false
 	return true
@@ -760,7 +760,7 @@ local function Scan()
 	local message = createMessage("Exploring the backrooms...")
 	
 	if _G.UI then
-		_G.UI.UpdateStatus("Scanning at 50 studs...")
+		_G.UI.UpdateStatus("Scanning at roof level...")
 	end
 
 	local folder = getGeneratedBackrooms()
@@ -821,7 +821,7 @@ local function Scan()
 						newRoomsFound = newRoomsFound + 1
 						
 						if _G.UI then
-							_G.UI.UpdateStatus("Scanned " .. #_G.ScannedRooms .. " rooms at 50 studs")
+							_G.UI.UpdateStatus("Scanned " .. #_G.ScannedRooms .. " rooms at roof level")
 							_G.UI.UpdateRooms(#_G.ScannedRooms)
 						end
 
@@ -845,7 +845,7 @@ local function Scan()
 	task.wait(2)
 	
 	scanExistingRooms()
-	print("Initial scan at 50 studs: " .. #_G.ScannedRooms .. " rooms found")
+	print("Initial scan at roof level: " .. #_G.ScannedRooms .. " rooms found")
 
 	local maxLoops = 300
 	local loopCount = 0
@@ -920,14 +920,15 @@ local function Scan()
 		_G.VistedRooms[targetRoom.uid] = true
 		visitedCount = visitedCount + 1
 		
-		-- Teleport to 50 studs above the room
+		-- Teleport to roof level above the room
 		local teleportPos = Vector3.new(
 			targetRoom.Position.X,
 			SCAN_HEIGHT_OFFSET,
 			targetRoom.Position.Z
 		)
 		
-		print("📍 Scanning room at 50 studs: " .. (targetRoom.Id or "Unknown") .. " (" .. visitedCount .. "/" .. #_G.ScannedRooms .. " visited)")
+		print("📍 Scanning room at roof level: " .. (targetRoom.Id or "Unknown") .. " (" .. visitedCount .. "/" .. #_G.ScannedRooms .. " visited)")
+		print("   Position: Y=" .. SCAN_HEIGHT_OFFSET .. " (roof level)")
 		
 		-- Teleport and wait for rooms to load
 		local success = TeleportAndLoad(teleportPos)
@@ -943,7 +944,7 @@ local function Scan()
 		
 		if newRooms and newRooms > 0 then
 			noNewRoomsCount = 0
-			print("✅ Found " .. newRooms .. " new rooms at 50 studs! Total: " .. #_G.ScannedRooms)
+			print("✅ Found " .. newRooms .. " new rooms at roof level! Total: " .. #_G.ScannedRooms)
 			print("   Boss Rooms: " .. #_G.AllBossRooms .. " | Mini Chests: " .. #_G.AllMiniChestRooms)
 		else
 			noNewRoomsCount = noNewRoomsCount + 1
@@ -962,7 +963,7 @@ local function Scan()
 		if loopCount % 10 == 0 then
 			print("📊 Progress: " .. #_G.ScannedRooms .. " rooms (" .. loopCount .. "/" .. maxLoops .. ")")
 			print("   Visited: " .. visitedCount .. " | Unvisited: " .. (#_G.ScannedRooms - visitedCount))
-			print("   Scan Height: 50 studs")
+			print("   Scan Height: " .. SCAN_HEIGHT_OFFSET .. " studs (ROOF LEVEL)")
 		end
 	end
 
@@ -972,7 +973,7 @@ local function Scan()
 	DebugHallwayPositions()
 	
 	if _G.UI then
-		_G.UI.UpdateStatus("Scan Complete at 50 studs (" .. #_G.ScannedRooms .. " rooms)")
+		_G.UI.UpdateStatus("Scan Complete at roof level (" .. #_G.ScannedRooms .. " rooms)")
 		_G.UI.UpdateRooms(#_G.ScannedRooms)
 	end
 	
@@ -984,7 +985,7 @@ local function Scan()
 	print("Boss Rooms: " .. #_G.AllBossRooms)
 	print("Mini Chest Rooms: " .. #_G.AllMiniChestRooms)
 	print("Rooms visited: " .. visitedCount)
-	print("Scan Height: 50 studs")
+	print("Scan Height: " .. SCAN_HEIGHT_OFFSET .. " studs (ROOF LEVEL)")
 	print("=====================")
 end
 
