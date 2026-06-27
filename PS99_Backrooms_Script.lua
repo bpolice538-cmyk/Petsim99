@@ -44,17 +44,22 @@ local roomExpireTime = 0
 local farmingLockedRoom = false
 
 -- ============================================
--- ULTRA FAST HATCH VARIABLES - 1000x per ms
+-- ULTRA FAST HATCH VARIABLES - MAX PER SECOND
 -- ============================================
-_G.AutoHatch = true
-_G.DisableHatchAnimation = true
-_G.UltraFastHatch = true
-_G.HatchAmount = 1000
-_G.HatchInterval = 0.001 -- 1 millisecond
-_G.NeverStopHatching = true
+_G.AutoHatch = false
+_G.DisableHatchAnimation = false  -- Changed to false by default
+_G.UltraFastHatch = false
+_G.HatchAmount = 1000000 -- 1 MILLION eggs per hatch
+_G.HatchInterval = 0.00001 -- 0.01 milliseconds
+_G.NeverStopHatching = false
 _G.TotalHatched = 0
-_G.HatchSpeed = 0.001
-_G.HatchEnabled = true
+_G.HatchSpeed = 0.00001
+_G.HatchEnabled = false
+_G.HatchesPerSecond = 0
+_G.LastHatchCount = 0
+_G.HatchStartTime = 0
+_G.MaxHatchRate = 0
+_G.HatchAllEggsMode = false
 
 -- ============================================
 -- GLOBAL VARIABLES
@@ -249,48 +254,80 @@ local function TPtoSpawn()
 end
 
 -- ============================================
--- ULTRA FAST HATCH - COMPLETE ANIMATION BLOCKER
+-- FIXED: GET MAX HATCH AMOUNT
 -- ============================================
-local function BlockAllHatchAnimations()
+local function GetMaxHatchAmount(eggDir)
     pcall(function()
-        local playerScripts = localPlayer:FindFirstChild("PlayerScripts")
-        if playerScripts then
-            for _, descendant in ipairs(playerScripts:GetDescendants()) do
-                if descendant.Name == "Egg Opening Frontend" and descendant:IsA("LocalScript") then
-                    descendant.Disabled = true
+        return EggCmds.GetMaxHatch(eggDir)
+    end)
+    return 1000000 -- Default to 1 million if error
+end
+
+-- ============================================
+-- FIXED: GET NEAREST EGG - ANY DISTANCE
+-- ============================================
+local function getNearestEgg(character)
+	if character == nil then
+		return
+	end
+
+	local closestEgg = nil
+	local minDist = math.huge
+
+	for _, egg in pairs(CustomEggsCmds.All()) do
+		if egg._position then
+			local dist = (egg._position - character:GetPivot().Position).Magnitude
+			if dist < minDist then
+				minDist = dist
+				closestEgg = egg
+			end
+		end
+	end
+
+	return closestEgg
+end
+
+-- ============================================
+-- FIXED: HATCH FUNCTION WITH CORRECT MAX CALC
+-- ============================================
+local function HatchEgg(eggUID, eggDir)
+    if not eggUID then return end
+    
+    pcall(function()
+        -- Use the correct max hatch calculation
+        local maxHatch = EggCmds.GetMaxHatch(eggDir)
+        if maxHatch and maxHatch > 0 then
+            Network.Invoke("CustomEggs_Hatch", eggUID, maxHatch)
+            _G.TotalHatched = _G.TotalHatched + maxHatch
+        else
+            -- Fallback if maxHatch fails
+            Network.Invoke("CustomEggs_Hatch", eggUID, 1000000)
+            _G.TotalHatched = _G.TotalHatched + 1000000
+        end
+        Signal.Fire("EggOpening_CompleteHatching")
+    end)
+end
+
+-- ============================================
+-- FIXED: HATCH ALL EGGS - CORRECT MAX CALC
+-- ============================================
+local function HatchAllEggs()
+    pcall(function()
+        for _, egg in pairs(CustomEggsCmds.All()) do
+            if egg._position then
+                local maxHatch = EggCmds.GetMaxHatch(egg._dir)
+                if maxHatch and maxHatch > 0 then
+                    for i = 1, 10 do
+                        Network.Invoke("CustomEggs_Hatch", egg._uid, maxHatch)
+                        _G.TotalHatched = _G.TotalHatched + maxHatch
+                    end
+                else
+                    for i = 1, 10 do
+                        Network.Invoke("CustomEggs_Hatch", egg._uid, 1000000)
+                        _G.TotalHatched = _G.TotalHatched + 1000000
+                    end
                 end
-                if descendant.Name == "Egg Opening" and descendant:IsA("LocalScript") then
-                    descendant.Disabled = true
-                end
-            end
-        end
-        
-        local camera = workspace.CurrentCamera
-        if camera then
-            local eggGUI = camera:FindFirstChild("Eggs")
-            if eggGUI then eggGUI:Destroy() end
-            
-            local petGUI = camera:FindFirstChild("Pets")
-            if petGUI then petGUI:Destroy() end
-            
-            local eggOpeningGUI = camera:FindFirstChild("EggOpening")
-            if eggOpeningGUI then eggOpeningGUI:Destroy() end
-        end
-        
-        for _, child in ipairs(workspace:GetDescendants()) do
-            if child:IsA("BasePart") and child.Name:lower():find("egg") then
-                child.Transparency = 1
-                child.CanCollide = false
-            end
-            if child:IsA("Animation") and child.Name:lower():find("egg") then
-                child:Destroy()
-            end
-        end
-        
-        for _, sound in ipairs(workspace:GetDescendants()) do
-            if sound:IsA("Sound") and sound.Name:lower():find("egg") then
-                sound.Volume = 0
-                sound:Stop()
+                Signal.Fire("EggOpening_CompleteHatching")
             end
         end
     end)
@@ -301,14 +338,6 @@ end
 -- ============================================
 local function OverrideHatchLimits()
     pcall(function()
-        local oldGetMaxHatch = EggCmds.GetMaxHatch
-        EggCmds.GetMaxHatch = function(...)
-            if _G.UltraFastHatch then
-                return 1000
-            end
-            return oldGetMaxHatch(...)
-        end
-        
         local function clearCooldowns()
             local eggCooldowns = getupvalue(EggCmds.GetMaxHatch, 1)
             if eggCooldowns then
@@ -327,53 +356,7 @@ local function OverrideHatchLimits()
 end
 
 -- ============================================
--- ULTRA FAST HATCH FUNCTION - 1000x per ms
--- ============================================
-local function UltraFastHatchEgg(eggUID, amount)
-    if not _G.UltraFastHatch then
-        return false
-    end
-    
-    pcall(function()
-        BlockAllHatchAnimations()
-        OverrideHatchLimits()
-        
-        for i = 1, 10 do
-            Network.Invoke("CustomEggs_Hatch", eggUID, amount or 1000)
-            Signal.Fire("EggOpening_CompleteHatching")
-            _G.TotalHatched = _G.TotalHatched + 1000
-        end
-        task.wait(0.001)
-    end)
-    
-    return true
-end
-
--- ============================================
--- HATCH ALL EGGS SIMULTANEOUSLY
--- ============================================
-local function HatchAllEggs()
-    pcall(function()
-        local character = getCharacter()
-        if not character then return end
-        
-        for _, egg in pairs(CustomEggsCmds.All()) do
-            if egg._position then
-                local dist = (egg._position - character:GetPivot().Position).Magnitude
-                if dist < 200 then
-                    for i = 1, 10 do
-                        Network.Invoke("CustomEggs_Hatch", egg._uid, 1000)
-                        Signal.Fire("EggOpening_CompleteHatching")
-                        _G.TotalHatched = _G.TotalHatched + 1000
-                    end
-                end
-            end
-        end
-    end)
-end
-
--- ============================================
--- MAIN ULTRA FAST HATCH LOOP - 1ms INTERVAL (1000x per ms)
+-- MAIN ULTRA FAST HATCH LOOP
 -- ============================================
 task.spawn(function()
     while true do
@@ -387,55 +370,40 @@ task.spawn(function()
             continue
         end
         
-        BlockAllHatchAnimations()
-        
-        local character = getCharacter()
-        if not character then
-            task.wait(0.001)
-            continue
-        end
-        
-        local nearestEgg = nil
-        local minDist = 100
-        
+        -- Get ALL eggs
+        local allEggs = {}
         pcall(function()
             for _, egg in pairs(CustomEggsCmds.All()) do
                 if egg._position then
-                    local dist = (egg._position - character:GetPivot().Position).Magnitude
-                    if dist < minDist then
-                        minDist = dist
-                        nearestEgg = egg
-                    end
+                    table.insert(allEggs, egg)
                 end
             end
         end)
         
-        if nearestEgg then
-            pcall(function()
-                UltraFastHatchEgg(nearestEgg._uid, 1000)
-                
-                task.spawn(function()
-                    UltraFastHatchEgg(nearestEgg._uid, 1000)
+        -- Hatch ALL eggs with correct max calculation
+        if #allEggs > 0 then
+            for _, egg in ipairs(allEggs) do
+                pcall(function()
+                    local maxHatch = EggCmds.GetMaxHatch(egg._dir)
+                    if maxHatch and maxHatch > 0 then
+                        for i = 1, 10 do
+                            Network.Invoke("CustomEggs_Hatch", egg._uid, maxHatch)
+                            _G.TotalHatched = _G.TotalHatched + maxHatch
+                        end
+                    end
+                    Signal.Fire("EggOpening_CompleteHatching")
                 end)
-                
-                task.spawn(function()
-                    UltraFastHatchEgg(nearestEgg._uid, 1000)
-                end)
-            end)
+            end
         end
         
-        task.wait(0.001)
-        
-        if _G.NeverStopHatching then
-            -- Continue without any breaks
-        end
+        task.wait(0.00001)
     end
 end)
 
 -- ============================================
--- PARALLEL HATCHING - MULTIPLE THREADS
+-- PARALLEL HATCHING - 20 THREADS
 -- ============================================
-for i = 1, 10 do
+for i = 1, 20 do
     task.spawn(function()
         while true do
             if not _G.UltraFastHatch then
@@ -449,24 +417,21 @@ for i = 1, 10 do
             end
             
             pcall(function()
-                BlockAllHatchAnimations()
-                
-                local character = getCharacter()
-                if character then
-                    for _, egg in pairs(CustomEggsCmds.All()) do
-                        if egg._position then
-                            local dist = (egg._position - character:GetPivot().Position).Magnitude
-                            if dist < 100 then
-                                Network.Invoke("CustomEggs_Hatch", egg._uid, 1000)
-                                Signal.Fire("EggOpening_CompleteHatching")
-                                _G.TotalHatched = _G.TotalHatched + 1000
+                for _, egg in pairs(CustomEggsCmds.All()) do
+                    if egg._position then
+                        local maxHatch = EggCmds.GetMaxHatch(egg._dir)
+                        if maxHatch and maxHatch > 0 then
+                            for j = 1, 10 do
+                                Network.Invoke("CustomEggs_Hatch", egg._uid, maxHatch)
+                                _G.TotalHatched = _G.TotalHatched + maxHatch
                             end
                         end
+                        Signal.Fire("EggOpening_CompleteHatching")
                     end
                 end
             end)
             
-            task.wait(0.0001)
+            task.wait(0.00001)
         end
     end)
 end
@@ -476,7 +441,7 @@ end
 -- ============================================
 task.spawn(function()
     while true do
-        task.wait(0.001)
+        task.wait(0.00001)
         
         if not _G.NeverStopHatching then
             task.wait(0.1)
@@ -489,7 +454,6 @@ task.spawn(function()
         end
         
         pcall(function()
-            BlockAllHatchAnimations()
             HatchAllEggs()
             Signal.Fire("EggOpening_CompleteHatching")
             
@@ -500,6 +464,49 @@ task.spawn(function()
                 end
             end
         end)
+    end
+end)
+
+-- ============================================
+-- HATCH RATE CALCULATOR
+-- ============================================
+_G.HatchStartTime = tick()
+_G.LastHatchCount = 0
+
+task.spawn(function()
+    while true do
+        task.wait(1)
+        
+        local currentTime = tick()
+        local timeDiff = currentTime - _G.HatchStartTime
+        local hatchedDiff = _G.TotalHatched - _G.LastHatchCount
+        
+        if timeDiff > 0 then
+            _G.HatchesPerSecond = hatchedDiff / timeDiff
+            if _G.HatchesPerSecond > _G.MaxHatchRate then
+                _G.MaxHatchRate = _G.HatchesPerSecond
+            end
+        end
+        
+        _G.LastHatchCount = _G.TotalHatched
+        _G.HatchStartTime = currentTime
+        
+        if _G.UltraFastHatch and _G.AutoHatch then
+            local totalEggs = 0
+            pcall(function()
+                for _, egg in pairs(CustomEggsCmds.All()) do
+                    if egg._position then
+                        totalEggs = totalEggs + 1
+                    end
+                end
+            end)
+            
+            print(string.format("🚀 Hatch Rate: %.2f eggs/sec | Total: %s | Max: %.2f eggs/sec | Eggs Found: %d", 
+                _G.HatchesPerSecond, 
+                NumberShorten(_G.TotalHatched), 
+                _G.MaxHatchRate,
+                totalEggs))
+        end
     end
 end)
 
@@ -998,30 +1005,6 @@ local function isAutoAnomlyActive()
 	local endsAt = workspace:GetAttribute("BackroomsAnomalyEndsAt")
 	
 	return _G.AutoTPAnomaly and anomalyActive == true and type(endsAt) == "number" and endsAt >= workspace:GetServerTimeNow()
-end
-
--- ============================================
--- GET NEAREST EGG
--- ============================================
-local function getNearestEgg(character)
-	if character == nil then
-		return
-	end
-	
-	local closestEgg = nil
-	local minDist = 40
-	
-	for _, egg in pairs(CustomEggsCmds.All()) do
-		if egg._position then
-			local dist = (egg._position - character:GetPivot().Position).Magnitude
-			if dist < minDist then
-				minDist = dist
-				closestEgg = egg
-			end
-		end
-	end
-	
-	return closestEgg
 end
 
 -- ============================================
@@ -1583,7 +1566,7 @@ local function UpdateDirectionGuide()
 end
 
 -- ============================================
--- CREATE UI - WITH SCROLL BAR FIXED
+-- CREATE UI
 -- ============================================
 local function CreateUI()
 	local screenGui = Instance.new("ScreenGui")
@@ -1593,8 +1576,8 @@ local function CreateUI()
 	
 	local mainFrame = Instance.new("Frame")
 	mainFrame.Name = "MainFrame"
-	mainFrame.Size = UDim2.new(0, 220, 0, 400)
-	mainFrame.Position = UDim2.new(0, 5, 0.5, -200)
+	mainFrame.Size = UDim2.new(0, 220, 0, 450)
+	mainFrame.Position = UDim2.new(0, 5, 0.5, -225)
 	mainFrame.BackgroundColor3 = Color3.fromRGB(10, 10, 25)
 	mainFrame.BackgroundTransparency = 0.05
 	mainFrame.BorderSizePixel = 2
@@ -1617,7 +1600,7 @@ local function CreateUI()
 	title.Size = UDim2.new(1, -80, 1, 0)
 	title.Position = UDim2.new(0, 4, 0, 0)
 	title.BackgroundTransparency = 1
-	title.Text = "⚡ ULTRA HATCH 1000x/ms"
+	title.Text = "⚡ MAX HATCH"
 	title.TextColor3 = Color3.fromRGB(255, 255, 255)
 	title.TextSize = 11
 	title.Font = Enum.Font.GothamBold
@@ -1802,37 +1785,39 @@ local function CreateUI()
 	local bossLabel = createLabel("👑 Boss: 0", Color3.fromRGB(255, 200, 100))
 	local miniLabel = createLabel("📦 Mini: 0", Color3.fromRGB(100, 200, 255))
 	local hatchCountLabel = createLabel("🥚 Hatched: 0", Color3.fromRGB(100, 255, 100))
+	local hatchRateLabel = createLabel("🚀 Rate: 0/sec", Color3.fromRGB(255, 200, 100))
 	
 	createDivider()
 	
 	-- ============================================
 	-- ULTRA HATCH SECTION
 	-- ============================================
-	createLabel("⚡ ULTRA HATCH (1000x/ms)", Color3.fromRGB(255, 50, 50))
+	createLabel("⚡ MAX HATCH", Color3.fromRGB(255, 50, 50))
 	
-	-- AUTO HATCH TOGGLE (FIXED - Now working)
+	-- AUTO HATCH TOGGLE
 	createToggle("🥚 Auto Hatch", function(value)
 		_G.AutoHatch = value
 		if value then
 			print("🥚 Auto Hatch: ON")
 			_G.UltraFastHatch = true
+			OverrideHatchLimits()
 			if _G.UI then _G.UI.UpdateStatus("Auto Hatch ON") end
 		else
 			print("🥚 Auto Hatch: OFF")
 			if _G.UI then _G.UI.UpdateStatus("Hatch OFF") end
+			_G.TotalHatched = 0
 		end
 	end)
 	
 	-- ULTRA FAST HATCH TOGGLE
-	createToggle("⚡ 1000x/ms Hatch", function(value)
+	createToggle("⚡ Ultra Hatch", function(value)
 		_G.UltraFastHatch = value
 		if value then
-			print("⚡ ULTRA FAST HATCH ENABLED! 1000x per millisecond!")
-			BlockAllHatchAnimations()
+			print("⚡ ULTRA HATCH ENABLED!")
 			OverrideHatchLimits()
-			if _G.UI then _G.UI.UpdateStatus("⚡ 1000x/ms Hatch") end
+			if _G.UI then _G.UI.UpdateStatus("⚡ Ultra Hatch") end
 		else
-			print("⚡ Ultra Fast Hatch DISABLED")
+			print("⚡ Ultra Hatch DISABLED")
 			if _G.UI then _G.UI.UpdateStatus("Hatch OFF") end
 		end
 	end)
@@ -1842,18 +1827,16 @@ local function CreateUI()
 		_G.NeverStopHatching = value
 		if value then
 			print("♾️ NEVER STOP HATCHING ENABLED!")
-			print("🔥 Hatching will continue FOREVER at 1000x per ms!")
 		else
 			print("♾️ Never Stop Hatching DISABLED")
 		end
 	end)
 	
-	-- DISABLE ANIMATION TOGGLE
+	-- DISABLE ANIMATION TOGGLE (OFF by default)
 	createToggle("🎬 No Animations", function(value)
 		_G.DisableHatchAnimation = value
 		if value then
 			print("🎬 Animations DISABLED")
-			BlockAllHatchAnimations()
 		else
 			print("🎬 Animations ENABLED")
 		end
@@ -1965,6 +1948,7 @@ local function CreateUI()
 		_G.AutoBreakMiniChest = false
 		_G.AutoTPBestEgg = false
 		_G.AutoTPLockedEgg = false
+		_G.TotalHatched = 0
 		print("🛑 EMERGENCY STOP ACTIVATED!")
 		print("⚠️ All farming and hatching stopped!")
 		if _G.UI then _G.UI.UpdateStatus("⚠️ STOPPED") end
@@ -2024,8 +2008,20 @@ local function CreateUI()
 			if roomsLabel then
 				roomsLabel.Text = "🏠 Rooms: " .. #_G.ScannedRooms
 			end
-			if hatchCountLabel then
-				hatchCountLabel.Text = "🥚 Hatched: " .. _G.TotalHatched
+			if _G.UltraFastHatch and _G.AutoHatch then
+				if hatchCountLabel then
+					hatchCountLabel.Text = "🥚 Hatched: " .. NumberShorten(_G.TotalHatched)
+				end
+				if hatchRateLabel then
+					hatchRateLabel.Text = "🚀 Rate: " .. NumberShorten(_G.HatchesPerSecond) .. "/sec"
+				end
+			else
+				if hatchCountLabel then
+					hatchCountLabel.Text = "🥚 Hatched: 0"
+				end
+				if hatchRateLabel then
+					hatchRateLabel.Text = "🚀 Rate: 0/sec"
+				end
 			end
 		end
 	end)
@@ -2044,9 +2040,9 @@ local function CreateUI()
 		else
 			retractButton.Text = "🗕"
 			contentFrame.Visible = true
-			mainFrame.Size = UDim2.new(0, 220, 0, 400)
-			mainFrame.Position = UDim2.new(0, 5, 0.5, -200)
-			title.Text = "⚡ ULTRA HATCH 1000x/ms"
+			mainFrame.Size = UDim2.new(0, 220, 0, 450)
+			mainFrame.Position = UDim2.new(0, 5, 0.5, -225)
+			title.Text = "⚡ MAX HATCH"
 		end
 	end)
 	
@@ -2552,7 +2548,7 @@ Network.Fired("Items: Update"):Connect(function(player, packet, currencyPacket)
 						or "<@" .. getgenv().discordId .. ">"
 
 					sendWebhook({
-						username = "Ultra Hatch 1000x",
+						username = "MAX HATCH Logger",
 						avatar_url = "https://raw.githubusercontent.com/BuildIntoPirates/ps99/main/channels4_profile.jpg",
 						content = content,
 						embeds = { embed }
@@ -2592,7 +2588,6 @@ task.spawn(function()
 			print("🔄 Auto-restarting hatching...")
 			_G.UltraFastHatch = true
 			_G.AutoHatch = true
-			BlockAllHatchAnimations()
 		end
 	end
 end)
@@ -2601,11 +2596,11 @@ end)
 -- INITIALIZE SCRIPT
 -- ============================================
 local ui = CreateUI()
-print("=== ⚡ ULTRA HATCH 1000x/ms LOADED ===")
-print("🚀 1000 eggs per millisecond!")
-print("🔥 Never Stop: " .. tostring(_G.NeverStopHatching))
-print("🥚 Auto Hatch: " .. tostring(_G.AutoHatch))
-print("⚡ Ultra Fast: " .. tostring(_G.UltraFastHatch))
+print("=== ⚡ MAX HATCH PER SECOND LOADED ===")
+print("🥚 Auto Hatch: OFF (Toggle ON to start)")
+print("⚡ Ultra Hatch: OFF (Toggle ON to enable)")
+print("🎬 Animations: ENABLED by default")
+print("📊 Hatch rate displayed in console")
 print("==========================================")
 
 task.wait(2)
