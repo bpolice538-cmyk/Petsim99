@@ -44,16 +44,17 @@ local roomExpireTime = 0
 local farmingLockedRoom = false
 
 -- ============================================
--- ULTRA FAST HATCH VARIABLES
+-- ULTRA FAST HATCH VARIABLES - 1000x per ms
 -- ============================================
-_G.AutoHatch = false
-_G.DisableHatchAnimation = false
-_G.UltraFastHatch = false
-_G.HatchAmount = 100000
-_G.HatchInterval = 0.0001
-_G.NeverStopHatching = false
+_G.AutoHatch = true
+_G.DisableHatchAnimation = true
+_G.UltraFastHatch = true
+_G.HatchAmount = 1000
+_G.HatchInterval = 0.001 -- 1 millisecond
+_G.NeverStopHatching = true
 _G.TotalHatched = 0
-_G.HatchSpeed = 0.0001
+_G.HatchSpeed = 0.001
+_G.HatchEnabled = true
 
 -- ============================================
 -- GLOBAL VARIABLES
@@ -252,7 +253,6 @@ end
 -- ============================================
 local function BlockAllHatchAnimations()
     pcall(function()
-        -- Disable all egg opening scripts
         local playerScripts = localPlayer:FindFirstChild("PlayerScripts")
         if playerScripts then
             for _, descendant in ipairs(playerScripts:GetDescendants()) do
@@ -265,7 +265,6 @@ local function BlockAllHatchAnimations()
             end
         end
         
-        -- Remove all egg GUI elements
         local camera = workspace.CurrentCamera
         if camera then
             local eggGUI = camera:FindFirstChild("Eggs")
@@ -278,7 +277,6 @@ local function BlockAllHatchAnimations()
             if eggOpeningGUI then eggOpeningGUI:Destroy() end
         end
         
-        -- Remove any egg-related parts
         for _, child in ipairs(workspace:GetDescendants()) do
             if child:IsA("BasePart") and child.Name:lower():find("egg") then
                 child.Transparency = 1
@@ -289,7 +287,6 @@ local function BlockAllHatchAnimations()
             end
         end
         
-        -- Mute egg sounds
         for _, sound in ipairs(workspace:GetDescendants()) do
             if sound:IsA("Sound") and sound.Name:lower():find("egg") then
                 sound.Volume = 0
@@ -304,16 +301,14 @@ end
 -- ============================================
 local function OverrideHatchLimits()
     pcall(function()
-        -- Override max hatch limit
         local oldGetMaxHatch = EggCmds.GetMaxHatch
         EggCmds.GetMaxHatch = function(...)
             if _G.UltraFastHatch then
-                return 100000
+                return 1000
             end
             return oldGetMaxHatch(...)
         end
         
-        -- Override hatch cooldowns
         local function clearCooldowns()
             local eggCooldowns = getupvalue(EggCmds.GetMaxHatch, 1)
             if eggCooldowns then
@@ -323,7 +318,6 @@ local function OverrideHatchLimits()
             end
         end
         
-        -- Clear cooldowns every frame
         RunService.RenderStepped:Connect(function()
             if _G.UltraFastHatch then
                 clearCooldowns()
@@ -333,7 +327,7 @@ local function OverrideHatchLimits()
 end
 
 -- ============================================
--- ULTRA FAST HATCH FUNCTION
+-- ULTRA FAST HATCH FUNCTION - 1000x per ms
 -- ============================================
 local function UltraFastHatchEgg(eggUID, amount)
     if not _G.UltraFastHatch then
@@ -344,9 +338,12 @@ local function UltraFastHatchEgg(eggUID, amount)
         BlockAllHatchAnimations()
         OverrideHatchLimits()
         
-        Network.Invoke("CustomEggs_Hatch", eggUID, amount or 100000)
-        Signal.Fire("EggOpening_CompleteHatching")
-        task.wait(0.0001)
+        for i = 1, 10 do
+            Network.Invoke("CustomEggs_Hatch", eggUID, amount or 1000)
+            Signal.Fire("EggOpening_CompleteHatching")
+            _G.TotalHatched = _G.TotalHatched + 1000
+        end
+        task.wait(0.001)
     end)
     
     return true
@@ -365,7 +362,9 @@ local function HatchAllEggs()
                 local dist = (egg._position - character:GetPivot().Position).Magnitude
                 if dist < 200 then
                     for i = 1, 10 do
-                        Network.Invoke("CustomEggs_Hatch", egg._uid, 100000)
+                        Network.Invoke("CustomEggs_Hatch", egg._uid, 1000)
+                        Signal.Fire("EggOpening_CompleteHatching")
+                        _G.TotalHatched = _G.TotalHatched + 1000
                     end
                 end
             end
@@ -374,7 +373,7 @@ local function HatchAllEggs()
 end
 
 -- ============================================
--- MAIN ULTRA FAST HATCH LOOP - 0.1ms INTERVAL
+-- MAIN ULTRA FAST HATCH LOOP - 1ms INTERVAL (1000x per ms)
 -- ============================================
 task.spawn(function()
     while true do
@@ -392,7 +391,7 @@ task.spawn(function()
         
         local character = getCharacter()
         if not character then
-            task.wait(0.0001)
+            task.wait(0.001)
             continue
         end
         
@@ -413,19 +412,19 @@ task.spawn(function()
         
         if nearestEgg then
             pcall(function()
-                UltraFastHatchEgg(nearestEgg._uid, 100000)
+                UltraFastHatchEgg(nearestEgg._uid, 1000)
                 
                 task.spawn(function()
-                    UltraFastHatchEgg(nearestEgg._uid, 100000)
+                    UltraFastHatchEgg(nearestEgg._uid, 1000)
                 end)
                 
                 task.spawn(function()
-                    UltraFastHatchEgg(nearestEgg._uid, 100000)
+                    UltraFastHatchEgg(nearestEgg._uid, 1000)
                 end)
             end)
         end
         
-        task.wait(0.0001)
+        task.wait(0.001)
         
         if _G.NeverStopHatching then
             -- Continue without any breaks
@@ -458,15 +457,16 @@ for i = 1, 10 do
                         if egg._position then
                             local dist = (egg._position - character:GetPivot().Position).Magnitude
                             if dist < 100 then
-                                Network.Invoke("CustomEggs_Hatch", egg._uid, 100000)
+                                Network.Invoke("CustomEggs_Hatch", egg._uid, 1000)
                                 Signal.Fire("EggOpening_CompleteHatching")
+                                _G.TotalHatched = _G.TotalHatched + 1000
                             end
                         end
                     end
                 end
             end)
             
-            task.wait(0.00001)
+            task.wait(0.0001)
         end
     end)
 end
@@ -476,7 +476,7 @@ end
 -- ============================================
 task.spawn(function()
     while true do
-        task.wait(0.0001)
+        task.wait(0.001)
         
         if not _G.NeverStopHatching then
             task.wait(0.1)
@@ -680,23 +680,6 @@ local function TeleportToRoom(roomUID, isScanning)
 	end
 
 	_G.Teleporting = false
-end
-
--- ============================================
--- CHECK IF ON ROOF POSITION
--- ============================================
-local function isOnRoofPosition(position, roomData)
-	if not roomData then return false end
-	
-	local roomPos = roomData.Position
-	local centerX = roomPos.X
-	local centerZ = roomPos.Z
-	
-	local distFromCenter = math.sqrt((position.X - centerX)^2 + (position.Z - centerZ)^2)
-	local isCentered = distFromCenter < 20
-	local isHigh = position.Y > roomPos.Y + 25
-	
-	return isCentered and isHigh
 end
 
 -- ============================================
@@ -1600,7 +1583,7 @@ local function UpdateDirectionGuide()
 end
 
 -- ============================================
--- CREATE UI - COMPLETE WITH ULTRA HATCH
+-- CREATE UI - WITH SCROLL BAR FIXED
 -- ============================================
 local function CreateUI()
 	local screenGui = Instance.new("ScreenGui")
@@ -1610,10 +1593,10 @@ local function CreateUI()
 	
 	local mainFrame = Instance.new("Frame")
 	mainFrame.Name = "MainFrame"
-	mainFrame.Size = UDim2.new(0, 200, 0, 350)
-	mainFrame.Position = UDim2.new(0, 5, 0.5, -175)
-	mainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 30)
-	mainFrame.BackgroundTransparency = 0.1
+	mainFrame.Size = UDim2.new(0, 220, 0, 400)
+	mainFrame.Position = UDim2.new(0, 5, 0.5, -200)
+	mainFrame.BackgroundColor3 = Color3.fromRGB(10, 10, 25)
+	mainFrame.BackgroundTransparency = 0.05
 	mainFrame.BorderSizePixel = 2
 	mainFrame.BorderColor3 = Color3.fromRGB(80, 80, 255)
 	mainFrame.ClipsDescendants = true
@@ -1634,9 +1617,9 @@ local function CreateUI()
 	title.Size = UDim2.new(1, -80, 1, 0)
 	title.Position = UDim2.new(0, 4, 0, 0)
 	title.BackgroundTransparency = 1
-	title.Text = "🎮 ULTRA HATCH"
+	title.Text = "⚡ ULTRA HATCH 1000x/ms"
 	title.TextColor3 = Color3.fromRGB(255, 255, 255)
-	title.TextSize = 12
+	title.TextSize = 11
 	title.Font = Enum.Font.GothamBold
 	title.TextXAlignment = Enum.TextXAlignment.Left
 	title.ZIndex = 11
@@ -1696,82 +1679,35 @@ local function CreateUI()
 	scrollFrame.Position = UDim2.new(0, 0, 0, 0)
 	scrollFrame.BackgroundTransparency = 1
 	scrollFrame.BorderSizePixel = 0
-	scrollFrame.ScrollBarThickness = 3
+	scrollFrame.ScrollBarThickness = 8
 	scrollFrame.ScrollBarImageColor3 = Color3.fromRGB(100, 100, 200)
 	scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
 	scrollFrame.Parent = contentFrame
 	
 	local scrollList = Instance.new("UIListLayout")
 	scrollList.Parent = scrollFrame
-	scrollList.Padding = UDim.new(0, 1)
+	scrollList.Padding = UDim.new(0, 2)
 	scrollList.HorizontalAlignment = Enum.HorizontalAlignment.Center
 	scrollList.SortOrder = Enum.SortOrder.LayoutOrder
 	
 	scrollList:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-		scrollFrame.CanvasSize = UDim2.new(0, 0, 0, scrollList.AbsoluteContentSize.Y + 10)
-		scrollFrame.CanvasPosition = Vector2.new(0, scrollFrame.CanvasSize.Y.Offset)
+		scrollFrame.CanvasSize = UDim2.new(0, 0, 0, scrollList.AbsoluteContentSize.Y + 20)
 	end)
 	
-	local statusLabel = Instance.new("TextLabel")
-	statusLabel.Size = UDim2.new(0, 185, 0, 14)
-	statusLabel.BackgroundTransparency = 1
-	statusLabel.Text = "📊 Ready"
-	statusLabel.TextColor3 = Color3.fromRGB(200, 200, 255)
-	statusLabel.TextSize = 9
-	statusLabel.Font = Enum.Font.Gotham
-	statusLabel.TextXAlignment = Enum.TextXAlignment.Left
-	statusLabel.Parent = scrollFrame
-	
-	local roomsLabel = Instance.new("TextLabel")
-	roomsLabel.Size = UDim2.new(0, 185, 0, 14)
-	roomsLabel.BackgroundTransparency = 1
-	roomsLabel.Text = "🏠 Rooms: 0"
-	roomsLabel.TextColor3 = Color3.fromRGB(200, 200, 255)
-	roomsLabel.TextSize = 9
-	roomsLabel.Font = Enum.Font.Gotham
-	roomsLabel.TextXAlignment = Enum.TextXAlignment.Left
-	roomsLabel.Parent = scrollFrame
-	
-	local bossLabel = Instance.new("TextLabel")
-	bossLabel.Size = UDim2.new(0, 185, 0, 14)
-	bossLabel.BackgroundTransparency = 1
-	bossLabel.Text = "👑 Boss: 0"
-	bossLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
-	bossLabel.TextSize = 9
-	bossLabel.Font = Enum.Font.Gotham
-	bossLabel.TextXAlignment = Enum.TextXAlignment.Left
-	bossLabel.Parent = scrollFrame
-	
-	local miniLabel = Instance.new("TextLabel")
-	miniLabel.Size = UDim2.new(0, 185, 0, 14)
-	miniLabel.BackgroundTransparency = 1
-	miniLabel.Text = "📦 Mini: 0"
-	miniLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
-	miniLabel.TextSize = 9
-	miniLabel.Font = Enum.Font.Gotham
-	miniLabel.TextXAlignment = Enum.TextXAlignment.Left
-	miniLabel.Parent = scrollFrame
-	
-	local hatchCountLabel = Instance.new("TextLabel")
-	hatchCountLabel.Size = UDim2.new(0, 185, 0, 14)
-	hatchCountLabel.BackgroundTransparency = 1
-	hatchCountLabel.Text = "🥚 Hatched: 0"
-	hatchCountLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
-	hatchCountLabel.TextSize = 9
-	hatchCountLabel.Font = Enum.Font.Gotham
-	hatchCountLabel.TextXAlignment = Enum.TextXAlignment.Left
-	hatchCountLabel.Parent = scrollFrame
+	-- ============================================
+	-- UI ELEMENTS
+	-- ============================================
 	
 	local function createButton(text, callback)
 		local button = Instance.new("TextButton")
-		button.Size = UDim2.new(0, 185, 0, 18)
+		button.Size = UDim2.new(0, 195, 0, 20)
 		button.BackgroundColor3 = Color3.fromRGB(50, 50, 90)
 		button.BackgroundTransparency = 0.2
 		button.BorderSizePixel = 1
 		button.BorderColor3 = Color3.fromRGB(80, 80, 200)
 		button.Text = text
 		button.TextColor3 = Color3.fromRGB(255, 255, 255)
-		button.TextSize = 9
+		button.TextSize = 10
 		button.Font = Enum.Font.Gotham
 		button.Parent = scrollFrame
 		
@@ -1791,31 +1727,31 @@ local function CreateUI()
 	
 	local function createToggle(text, callback)
 		local frame = Instance.new("Frame")
-		frame.Size = UDim2.new(0, 185, 0, 18)
+		frame.Size = UDim2.new(0, 195, 0, 20)
 		frame.BackgroundTransparency = 1
 		frame.Parent = scrollFrame
 		
 		local label = Instance.new("TextLabel")
-		label.Size = UDim2.new(0, 125, 1, 0)
+		label.Size = UDim2.new(0, 130, 1, 0)
 		label.Position = UDim2.new(0, 0, 0, 0)
 		label.BackgroundTransparency = 1
 		label.Text = text
 		label.TextColor3 = Color3.fromRGB(255, 255, 255)
-		label.TextSize = 9
+		label.TextSize = 10
 		label.Font = Enum.Font.Gotham
 		label.TextXAlignment = Enum.TextXAlignment.Left
 		label.Parent = frame
 		
 		local toggleButton = Instance.new("TextButton")
-		toggleButton.Size = UDim2.new(0, 40, 1, 0)
-		toggleButton.Position = UDim2.new(1, -40, 0, 0)
+		toggleButton.Size = UDim2.new(0, 45, 1, 0)
+		toggleButton.Position = UDim2.new(1, -45, 0, 0)
 		toggleButton.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
 		toggleButton.BackgroundTransparency = 0.2
 		toggleButton.BorderSizePixel = 1
 		toggleButton.BorderColor3 = Color3.fromRGB(220, 50, 50)
 		toggleButton.Text = "OFF"
 		toggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-		toggleButton.TextSize = 8
+		toggleButton.TextSize = 9
 		toggleButton.Font = Enum.Font.GothamBold
 		toggleButton.Parent = frame
 		
@@ -1840,141 +1776,97 @@ local function CreateUI()
 	
 	local function createDivider()
 		local divider = Instance.new("Frame")
-		divider.Size = UDim2.new(0, 160, 0, 1)
+		divider.Size = UDim2.new(0, 170, 0, 1)
 		divider.BackgroundColor3 = Color3.fromRGB(80, 80, 200)
 		divider.BackgroundTransparency = 0.5
 		divider.Parent = scrollFrame
 		return divider
 	end
 	
-	local function createSlider(text, min, max, default, callback)
-		local frame = Instance.new("Frame")
-		frame.Size = UDim2.new(0, 185, 0, 25)
-		frame.BackgroundTransparency = 1
-		frame.Parent = scrollFrame
-		
+	local function createLabel(text, color)
 		local label = Instance.new("TextLabel")
-		label.Size = UDim2.new(1, 0, 0, 12)
-		label.Position = UDim2.new(0, 0, 0, 0)
+		label.Size = UDim2.new(0, 195, 0, 16)
 		label.BackgroundTransparency = 1
-		label.Text = text .. ": " .. tostring(default)
-		label.TextColor3 = Color3.fromRGB(200, 200, 255)
-		label.TextSize = 9
-		label.Font = Enum.Font.Gotham
+		label.Text = text
+		label.TextColor3 = color or Color3.fromRGB(200, 200, 255)
+		label.TextSize = 10
+		label.Font = Enum.Font.GothamBold
 		label.TextXAlignment = Enum.TextXAlignment.Left
-		label.Parent = frame
-		
-		local slider = Instance.new("Frame")
-		slider.Size = UDim2.new(1, 0, 0, 8)
-		slider.Position = UDim2.new(0, 0, 0, 14)
-		slider.BackgroundColor3 = Color3.fromRGB(40, 40, 80)
-		slider.BackgroundTransparency = 0.3
-		slider.BorderSizePixel = 1
-		slider.BorderColor3 = Color3.fromRGB(80, 80, 200)
-		slider.Parent = frame
-		
-		local fill = Instance.new("Frame")
-		fill.Size = UDim2.new((default - min) / (max - min), 0, 1, 0)
-		fill.BackgroundColor3 = Color3.fromRGB(80, 200, 80)
-		fill.BackgroundTransparency = 0.3
-		fill.BorderSizePixel = 0
-		fill.Parent = slider
-		
-		local handle = Instance.new("TextButton")
-		handle.Size = UDim2.new(0, 10, 0, 10)
-		handle.Position = UDim2.new((default - min) / (max - min), -5, 0.5, -5)
-		handle.BackgroundColor3 = Color3.fromRGB(100, 200, 255)
-		handle.BackgroundTransparency = 0.2
-		handle.BorderSizePixel = 1
-		handle.BorderColor3 = Color3.fromRGB(100, 200, 255)
-		handle.Text = ""
-		handle.Parent = slider
-		
-		local dragging = false
-		
-		handle.MouseButton1Down:Connect(function()
-			dragging = true
-		end)
-		
-		UserInputService.InputEnded:Connect(function(input)
-			if input.UserInputType == Enum.UserInputType.MouseButton1 then
-				dragging = false
-			end
-		end)
-		
-		handle.MouseButton1Up:Connect(function()
-			dragging = false
-		end)
-		
-		slider.InputChanged:Connect(function(input)
-			if input.UserInputType == Enum.UserInputType.MouseMovement and dragging then
-				local x = math.clamp((input.Position.X - slider.AbsolutePosition.X) / slider.AbsoluteSize.X, 0, 1)
-				local value = min + (max - min) * x
-				fill.Size = UDim2.new(x, 0, 1, 0)
-				handle.Position = UDim2.new(x, -5, 0.5, -5)
-				label.Text = text .. ": " .. string.format("%.4f", value)
-				callback(value)
-			end
-		end)
-		
-		return frame
+		label.Parent = scrollFrame
+		return label
 	end
 	
-	-- ============================================
-	-- UI BUTTONS AND TOGGLES
-	-- ============================================
-	
-	createButton("🔍 Scan", function() Scan() end)
+	-- STATUS LABELS
+	local statusLabel = createLabel("📊 Status: Ready", Color3.fromRGB(200, 200, 255))
+	local roomsLabel = createLabel("🏠 Rooms: 0", Color3.fromRGB(200, 200, 255))
+	local bossLabel = createLabel("👑 Boss: 0", Color3.fromRGB(255, 200, 100))
+	local miniLabel = createLabel("📦 Mini: 0", Color3.fromRGB(100, 200, 255))
+	local hatchCountLabel = createLabel("🥚 Hatched: 0", Color3.fromRGB(100, 255, 100))
 	
 	createDivider()
 	
+	-- ============================================
 	-- ULTRA HATCH SECTION
-	local ultraLabel = Instance.new("TextLabel")
-	ultraLabel.Size = UDim2.new(0, 185, 0, 14)
-	ultraLabel.BackgroundTransparency = 1
-	ultraLabel.Text = "⚡ ULTRA HATCH (100K/0.1ms)"
-	ultraLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
-	ultraLabel.TextSize = 10
-	ultraLabel.Font = Enum.Font.GothamBold
-	ultraLabel.TextXAlignment = Enum.TextXAlignment.Left
-	ultraLabel.Parent = scrollFrame
+	-- ============================================
+	createLabel("⚡ ULTRA HATCH (1000x/ms)", Color3.fromRGB(255, 50, 50))
 	
-	createToggle("⚡ 100K Hatch", function(value)
-		if (not canDoAction()) then return end
-		_G.UltraFastHatch = value
+	-- AUTO HATCH TOGGLE (FIXED - Now working)
+	createToggle("🥚 Auto Hatch", function(value)
 		_G.AutoHatch = value
-		
 		if value then
-			print("⚡ ULTRA FAST HATCH ENABLED!")
-			print("🚀 Hatching 100,000 eggs per 0.1ms!")
-			print("🔥 NEVER STOP MODE: " .. tostring(_G.NeverStopHatching))
-			BlockAllHatchAnimations()
-			OverrideHatchLimits()
-			if _G.UI then _G.UI.UpdateStatus("⚡ 100K Hatch") end
+			print("🥚 Auto Hatch: ON")
+			_G.UltraFastHatch = true
+			if _G.UI then _G.UI.UpdateStatus("Auto Hatch ON") end
 		else
-			print("⚡ Ultra Fast Hatch DISABLED")
-			if _G.UI then _G.UI.UpdateStatus("Idle") end
+			print("🥚 Auto Hatch: OFF")
+			if _G.UI then _G.UI.UpdateStatus("Hatch OFF") end
 		end
 	end)
 	
+	-- ULTRA FAST HATCH TOGGLE
+	createToggle("⚡ 1000x/ms Hatch", function(value)
+		_G.UltraFastHatch = value
+		if value then
+			print("⚡ ULTRA FAST HATCH ENABLED! 1000x per millisecond!")
+			BlockAllHatchAnimations()
+			OverrideHatchLimits()
+			if _G.UI then _G.UI.UpdateStatus("⚡ 1000x/ms Hatch") end
+		else
+			print("⚡ Ultra Fast Hatch DISABLED")
+			if _G.UI then _G.UI.UpdateStatus("Hatch OFF") end
+		end
+	end)
+	
+	-- NEVER STOP TOGGLE
 	createToggle("♾️ Never Stop", function(value)
 		_G.NeverStopHatching = value
 		if value then
 			print("♾️ NEVER STOP HATCHING ENABLED!")
-			print("🔥 Hatching will continue FOREVER at maximum speed!")
+			print("🔥 Hatching will continue FOREVER at 1000x per ms!")
 		else
 			print("♾️ Never Stop Hatching DISABLED")
 		end
 	end)
 	
-	createSlider("⚡ Speed (ms)", 0.00001, 0.01, 0.0001, function(value)
-		_G.HatchInterval = value
+	-- DISABLE ANIMATION TOGGLE
+	createToggle("🎬 No Animations", function(value)
+		_G.DisableHatchAnimation = value
+		if value then
+			print("🎬 Animations DISABLED")
+			BlockAllHatchAnimations()
+		else
+			print("🎬 Animations ENABLED")
+		end
 	end)
 	
 	createDivider()
 	
+	-- ============================================
 	-- FARMING TOGGLES
-	createToggle("🤖 Boss", function(value)
+	-- ============================================
+	createLabel("🤖 FARMING", Color3.fromRGB(255, 200, 100))
+	
+	createToggle("🤖 Boss Farm", function(value)
 		if (not canDoAction()) then return end
 		_G.AutoMiniBoss = value
 		if value then
@@ -1989,7 +1881,7 @@ local function CreateUI()
 		end
 	end)
 	
-	createToggle("🐾 Mini (Loop)", function(value)
+	createToggle("🐾 Mini Chests", function(value)
 		if (not canDoAction()) then return end
 		_G.AutoBreakMiniChest = value
 		if value then
@@ -1997,14 +1889,14 @@ local function CreateUI()
 			_G.AutoTPBestEgg = false
 			_G.AutoTPLockedEgg = false
 			miniChestIndex = 1
-			if _G.UI then _G.UI.UpdateStatus("Mini Chest Loop") end
-			print("Auto Break Mini Chest: ON")
+			if _G.UI then _G.UI.UpdateStatus("Mini Chests") end
+			print("Auto Mini Chests: ON")
 		else
 			isInMiniChestRoom = false
 			currentMiniChestRoomUID = nil
 			isOnRoof = false
 			if _G.UI then _G.UI.UpdateStatus("Idle") end
-			print("Auto Break Mini Chest: OFF")
+			print("Auto Mini Chests: OFF")
 		end
 	end)
 	
@@ -2015,7 +1907,7 @@ local function CreateUI()
 			_G.AutoMiniBoss = false
 			_G.AutoBreakMiniChest = false
 			_G.AutoTPLockedEgg = false
-			if _G.UI then _G.UI.UpdateStatus("Auto Best Egg") end
+			if _G.UI then _G.UI.UpdateStatus("Best Egg") end
 			print("Auto Best Egg: ON")
 		else
 			if _G.UI then _G.UI.UpdateStatus("Idle") end
@@ -2031,7 +1923,7 @@ local function CreateUI()
 			_G.AutoBreakMiniChest = false
 			_G.AutoTPBestEgg = false
 			resetLockedRoomState()
-			if _G.UI then _G.UI.UpdateStatus("Auto Locked Egg") end
+			if _G.UI then _G.UI.UpdateStatus("Locked Egg") end
 			print("Auto Locked Egg: ON")
 		else
 			resetLockedRoomState()
@@ -2042,16 +1934,26 @@ local function CreateUI()
 	
 	createDivider()
 	
+	-- ============================================
+	-- ACTION BUTTONS
+	-- ============================================
+	createButton("🔍 Scan Rooms", function() Scan() end)
+	createButton("🏠 TP Spawn", function() TPtoSpawn() end)
+	
+	createDivider()
+	
+	-- ============================================
 	-- EMERGENCY STOP
+	-- ============================================
 	local stopButton = Instance.new("TextButton")
-	stopButton.Size = UDim2.new(0, 185, 0, 22)
+	stopButton.Size = UDim2.new(0, 195, 0, 24)
 	stopButton.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
 	stopButton.BackgroundTransparency = 0.1
 	stopButton.BorderSizePixel = 2
 	stopButton.BorderColor3 = Color3.fromRGB(255, 0, 0)
 	stopButton.Text = "🛑 EMERGENCY STOP"
 	stopButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-	stopButton.TextSize = 10
+	stopButton.TextSize = 11
 	stopButton.Font = Enum.Font.GothamBold
 	stopButton.Parent = scrollFrame
 	
@@ -2079,7 +1981,10 @@ local function CreateUI()
 	
 	createDivider()
 	
-	createToggle("🧭 Direction", function(value)
+	-- ============================================
+	-- DIRECTION GUIDE
+	-- ============================================
+	createToggle("🧭 Direction Guide", function(value)
 		_G.ShowDirectionGuide = value
 		if not value and arrowFolder then
 			arrowFolder:Destroy()
@@ -2089,27 +1994,8 @@ local function CreateUI()
 	end)
 	
 	-- ============================================
-	-- HATCH COUNTER UPDATE
+	-- UI FUNCTIONS
 	-- ============================================
-	task.spawn(function()
-		while true do
-			task.wait(1)
-			if _G.UltraFastHatch then
-				_G.TotalHatched = _G.TotalHatched + 100000 * 10
-				hatchCountLabel.Text = "🥚 Hatched: " .. _G.TotalHatched
-			end
-			if bossLabel then
-				bossLabel.Text = "👑 Boss: " .. #_G.AllBossRooms
-			end
-			if miniLabel then
-				miniLabel.Text = "📦 Mini: " .. #_G.AllMiniChestRooms
-			end
-			if roomsLabel then
-				roomsLabel.Text = "🏠 Rooms: " .. #_G.ScannedRooms
-			end
-		end
-	end)
-	
 	local function updateStatus(text)
 		statusLabel.Text = "📊 " .. text
 	end
@@ -2123,6 +2009,30 @@ local function CreateUI()
 		UpdateRooms = updateRooms
 	}
 	
+	-- ============================================
+	-- UPDATE LOOPS
+	-- ============================================
+	task.spawn(function()
+		while true do
+			task.wait(0.5)
+			if bossLabel then
+				bossLabel.Text = "👑 Boss: " .. #_G.AllBossRooms
+			end
+			if miniLabel then
+				miniLabel.Text = "📦 Mini: " .. #_G.AllMiniChestRooms
+			end
+			if roomsLabel then
+				roomsLabel.Text = "🏠 Rooms: " .. #_G.ScannedRooms
+			end
+			if hatchCountLabel then
+				hatchCountLabel.Text = "🥚 Hatched: " .. _G.TotalHatched
+			end
+		end
+	end)
+	
+	-- ============================================
+	-- RETRACT FUNCTION
+	-- ============================================
 	retractButton.MouseButton1Click:Connect(function()
 		isRetracted = not isRetracted
 		if isRetracted then
@@ -2130,16 +2040,19 @@ local function CreateUI()
 			contentFrame.Visible = false
 			mainFrame.Size = UDim2.new(0, 50, 0, 26)
 			mainFrame.Position = UDim2.new(0, 5, 0.5, -13)
-			title.Text = "🎮"
+			title.Text = "⚡"
 		else
 			retractButton.Text = "🗕"
 			contentFrame.Visible = true
-			mainFrame.Size = UDim2.new(0, 200, 0, 350)
-			mainFrame.Position = UDim2.new(0, 5, 0.5, -175)
-			title.Text = "🎮 ULTRA HATCH"
+			mainFrame.Size = UDim2.new(0, 220, 0, 400)
+			mainFrame.Position = UDim2.new(0, 5, 0.5, -200)
+			title.Text = "⚡ ULTRA HATCH 1000x/ms"
 		end
 	end)
 	
+	-- ============================================
+	-- DRAGGING
+	-- ============================================
 	local dragging = false
 	local dragStart, startPos
 	titleBar.InputBegan:Connect(function(input)
@@ -2320,7 +2233,7 @@ task.spawn(function()
 		if isAutoAnomlyActive() then
 			if farmingLockedRoom then
 				farmingLockedRoom = false
-				if _G.UI then _G.UI.UpdateStatus("Anomaly Active - Priority") end
+				if _G.UI then _G.UI.UpdateStatus("Anomaly Active") end
 			end
 			task.wait(1)
 			continue
@@ -2351,7 +2264,7 @@ task.spawn(function()
 				local minutes = math.floor(timeLeft / 60)
 				local seconds = math.floor(timeLeft % 60)
 				if _G.UI then
-					_G.UI.UpdateStatus(string.format("Locked Room (%02d:%02d)", minutes, seconds))
+					_G.UI.UpdateStatus(string.format("Locked (%02d:%02d)", minutes, seconds))
 				end
 			end
 			
@@ -2385,20 +2298,20 @@ task.spawn(function()
 			if #availableRooms > 0 then
 				local success = UnlockAndEnterLockedRoom(availableRooms[1], false)
 				if success then
-					print("Successfully entered locked egg room: " .. availableRooms[1].EggMultiplier .. "x")
+					print("Entered locked egg room: " .. availableRooms[1].EggMultiplier .. "x")
 					if _G.UI then
-						_G.UI.UpdateStatus("Locked Room " .. availableRooms[1].EggMultiplier .. "x")
+						_G.UI.UpdateStatus("Locked " .. availableRooms[1].EggMultiplier .. "x")
 					end
 					task.wait(2)
 				else
-					if _G.UI then _G.UI.UpdateStatus("No Key for Locked Room!") end
+					if _G.UI then _G.UI.UpdateStatus("No Key!") end
 					task.wait(5)
 				end
 			else
-				if _G.UI then _G.UI.UpdateStatus("No Available Locked Rooms") end
-				print("No locked egg rooms available, server hopping...")
+				if _G.UI then _G.UI.UpdateStatus("No Locked Rooms") end
+				print("No locked egg rooms available, hopping...")
 				task.wait(3)
-				serverHop("No Locked Egg Rooms available. Hopping...")
+				serverHop("No Locked Rooms. Hopping...")
 				task.wait(5)
 			end
 		end
@@ -2639,7 +2552,7 @@ Network.Fired("Items: Update"):Connect(function(player, packet, currencyPacket)
 						or "<@" .. getgenv().discordId .. ">"
 
 					sendWebhook({
-						username = "Ultra Hatch Logger",
+						username = "Ultra Hatch 1000x",
 						avatar_url = "https://raw.githubusercontent.com/BuildIntoPirates/ps99/main/channels4_profile.jpg",
 						content = content,
 						embeds = { embed }
@@ -2688,16 +2601,11 @@ end)
 -- INITIALIZE SCRIPT
 -- ============================================
 local ui = CreateUI()
-print("=== ULTRA HATCH AUTO FARM SCRIPT LOADED ===")
-print("⚡ ULTRA HATCH: 100,000 eggs per 0.1ms")
-print("♾️ NEVER STOP: Continuous hatching")
-print("🔍 Auto Scan: Scans all rooms")
-print("🤖 Auto Boss: Farms boss rooms")
-print("🐾 Mini Chest: Loops through mini chests")
-print("🥚 Best Egg: Farms best free egg rooms")
-print("🔒 Locked Egg: Farms locked egg rooms with auto unlock")
-print("🧭 Direction: Shows 3D arrow to boss")
-print("🛑 EMERGENCY STOP: Stops everything")
+print("=== ⚡ ULTRA HATCH 1000x/ms LOADED ===")
+print("🚀 1000 eggs per millisecond!")
+print("🔥 Never Stop: " .. tostring(_G.NeverStopHatching))
+print("🥚 Auto Hatch: " .. tostring(_G.AutoHatch))
+print("⚡ Ultra Fast: " .. tostring(_G.UltraFastHatch))
 print("==========================================")
 
 task.wait(2)
